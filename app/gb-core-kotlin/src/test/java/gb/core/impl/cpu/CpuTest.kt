@@ -23,6 +23,25 @@ class CpuTest {
         assertEquals(0x0101u.toUShort(), cpu.registers.pc)
     }
 
+    @Test
+    fun `LD A n loads immediate value and advances PC`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x3E (LD A, n), 0x0101: 0x42 (即値)
+        memory[0x0100] = 0x3Eu
+        memory[0x0101] = 0x42u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x42u.toUByte(), cpu.registers.a)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

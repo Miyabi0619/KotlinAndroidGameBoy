@@ -18,6 +18,7 @@ class Cpu(
      */
     private object Cycles {
         const val NOP: Int = 4
+        const val LD_A_N: Int = 8
     }
 
     val registers = Registers()
@@ -34,6 +35,7 @@ class Cpu(
 
         return when (opcode) {
             0x00 -> executeNop()
+            0x3E -> executeLdAN()
             else -> error("Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}")
         }
     }
@@ -42,4 +44,20 @@ class Cpu(
      * NOP 命令: 何もしないで 4 サイクル消費する。
      */
     private fun executeNop(): Int = Cycles.NOP
+
+    /**
+     * LD A, n 命令: 即値 n を A レジスタにロードする。
+     *
+     * - オペコード: 0x3E
+     * - フォーマット: [0x3E][n]
+     * - 動作: A ← n, PC は合計 2 バイト進む, 8 サイクル
+     */
+    private fun executeLdAN(): Int {
+        val pc = registers.pc
+        val value = bus.readByte(pc)
+        registers.a = value
+        // 即値 1 バイト分 PC を進める
+        registers.pc = (pc.toInt() + 1).toUShort()
+        return Cycles.LD_A_N
+    }
 }
