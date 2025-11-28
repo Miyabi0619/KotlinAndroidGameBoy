@@ -21,4 +21,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "KotlinAndroidGameBoy"
 include(":app")
- 
+include(":app:gb-core-api")
+include(":app:gb-core-kotlin")
