@@ -5,7 +5,6 @@ import org.junit.Test
 
 @OptIn(ExperimentalUnsignedTypes::class)
 class CpuTest {
-
     @Test
     fun `NOP increments PC and takes 4 cycles`() {
         // メモリ全体を 0 で初期化し、先頭アドレスに NOP(0x00) を置く
@@ -14,6 +13,7 @@ class CpuTest {
 
         val cpu = Cpu(bus)
         cpu.registers.pc = 0x0100u.toUShort()
+        // cpu.registers.pc = 0x0000u.toUShort()
 
         val cycles = cpu.executeInstruction()
 
@@ -42,5 +42,3 @@ class CpuTest {
         const val MEMORY_SIZE = 0x10000 // 64KB
     }
 }
-
-
