@@ -1,0 +1,50 @@
+build:
+  maxIssues: 0
+  excludeCorrectable: true
+
+config:
+  validation: true
+
+processors:
+  active: true
+  exclude:
+    - 'DetektProgressListener'
+
+console-reports:
+  active: true
+  exclude:
+    - 'ProjectStatisticsReport'
+    - 'ComplexityReport'
+
+style:
+  MagicNumber:
+    active: false
+  WildcardImport:
+    active: true
+    excludes: ['**/build/**']
+  MaxLineLength:
+    active: true
+    maxLineLength: 140
+  UnusedPrivateMember:
+    active: true
+
+complexity:
+  LargeClass:
+    active: true
+    threshold: 400
+  LongMethod:
+    active: true
+    threshold: 80
+  TooManyFunctions:
+    active: true
+    thresholdInFiles: 30
+    thresholdInClasses: 20
+    thresholdInInterfaces: 20
+    thresholdInObjects: 20
+
+comments:
+  UndocumentedPublicClass:
+    active: false
+  UndocumentedPublicFunction:
+    active: false
+

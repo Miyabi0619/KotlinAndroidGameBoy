@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "miyabi0619.kotlinandroidgameboy"
+    namespace = "miyabi.kotlinandroidgameboy"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "miyabi0619.kotlinandroidgameboy"
+        applicationId = "miyabi.kotlinandroidgameboy"
         minSdk = 31
         targetSdk = 36
         versionCode = 1
@@ -25,7 +25,7 @@ android {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
         }
     }
