@@ -3,7 +3,10 @@ package gb.core.impl.cpu
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import kotlin.ExperimentalUnsignedTypes
+import kotlin.OptIn
 
+@OptIn(ExperimentalUnsignedTypes::class)
 class Mbc1Test {
     @Test
     fun `ROM bank mapping switches banks correctly`() {

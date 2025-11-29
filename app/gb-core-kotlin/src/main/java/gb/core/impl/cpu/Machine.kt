@@ -71,6 +71,16 @@ class Machine(
             )
         cpu = Cpu(bus)
         ppu = Ppu(vram)
+
+        // Game Boy 起動時のレジスタ初期化
+        // 実機では 0x0100 から実行開始（0x0000-0x00FF はブートROM領域だが、ここでは省略）
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFFEu.toUShort()
+        // 実機の起動時レジスタ値（DMG のブートROM 終了時の状態）
+        cpu.registers.af = 0x01B0u.toUShort() // A=0x01, F=0xB0 (Z=1, N=0, H=1, C=1)
+        cpu.registers.bc = 0x0013u.toUShort()
+        cpu.registers.de = 0x00D8u.toUShort()
+        cpu.registers.hl = 0x014Du.toUShort()
     }
 
     private fun createMbc1AndRamIfNeeded(rom: UByteArray): Pair<Mbc1?, UByteArray?> {

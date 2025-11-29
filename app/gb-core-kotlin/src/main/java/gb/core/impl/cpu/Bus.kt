@@ -1,5 +1,8 @@
 package gb.core.impl.cpu
 
+import kotlin.ExperimentalUnsignedTypes
+import kotlin.OptIn
+
 /**
  * CPU がメモリにアクセスするためのインターフェース。
  *
@@ -21,6 +24,7 @@ interface Bus {
  * - ROM / RAM / I/O などの区別は行わない
  * - CPU や命令実装のテスト用に使用する
  */
+@OptIn(ExperimentalUnsignedTypes::class)
 class SimpleMemoryBus(
     private val memory: UByteArray,
 ) : Bus {

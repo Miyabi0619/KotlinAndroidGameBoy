@@ -70,39 +70,63 @@ class GameBoyCoreImpl : GameBoyCore {
             )
         }
 
-        // Machine がまだなければ ROM から初期化
-        if (machine == null) {
-            machine = Machine(currentRom.toUByteArray())
-        }
-        val m = machine!!
+        return try {
+            // Machine がまだなければ ROM から初期化
+            if (machine == null) {
+                android.util.Log.d("GameBoyCore", "Creating new Machine")
+                machine = Machine(currentRom.toUByteArray())
+            }
+            val m = machine!!
 
-        // このフレームの入力状態を Joypad に反映
-        m.updateInput(input)
+            // このフレームの入力状態を Joypad に反映
+            m.updateInput(input)
 
-        // 1 フレームぶんの CPU サイクルをざっくり回す
-        // Game Boy は約 70224 サイクル / フレーム（59.7Hz）なので、それに近い値を使う。
-        val targetCyclesPerFrame = 70_224
-        var accumulatedCycles = 0
-        while (accumulatedCycles < targetCyclesPerFrame) {
-            accumulatedCycles += m.stepInstruction()
-        }
+            // 1 フレームぶんの CPU サイクルをざっくり回す
+            // Game Boy は約 70224 サイクル / フレーム（59.7Hz）なので、それに近い値を使う。
+            val targetCyclesPerFrame = 70_224
+            var accumulatedCycles = 0
+            var instructionCount = 0
+            while (accumulatedCycles < targetCyclesPerFrame) {
+                accumulatedCycles += m.stepInstruction()
+                instructionCount++
+            }
 
-        frameIndex += 1
+            frameIndex += 1
 
-        val pixels = m.ppu.renderFrame()
-        val stats =
-            FrameStats(
-                frameIndex = frameIndex,
-                cpuCycles = accumulatedCycles.toLong(),
-                fpsEstimate = null,
+            val pixels = m.ppu.renderFrame()
+            if (frameIndex % 60 == 1L) {
+                android.util.Log.d(
+                    "GameBoyCore",
+                    "Frame $frameIndex: cycles=$accumulatedCycles, instructions=$instructionCount, pixels size=${pixels.size}",
+                )
+            }
+
+            val stats =
+                FrameStats(
+                    frameIndex = frameIndex,
+                    cpuCycles = accumulatedCycles.toLong(),
+                    fpsEstimate = null,
+                )
+
+            CoreResult.success(
+                FrameResult(
+                    frameBuffer = pixels,
+                    stats = stats,
+                ),
             )
-
-        return CoreResult.success(
-            FrameResult(
-                frameBuffer = pixels,
-                stats = stats,
-            ),
-        )
+        } catch (e: Exception) {
+            // デバッグ用: ログにスタックトレースを出力
+            android.util.Log.e(
+                "GameBoyCore",
+                "Exception in runFrame: ${e.message}",
+                e,
+            )
+            CoreResult.error(
+                CoreError.InternalError(
+                    cause = e,
+                ),
+            )
+        }
     }
 
     override fun saveState(): CoreResult<SaveState> {

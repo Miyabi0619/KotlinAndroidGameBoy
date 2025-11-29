@@ -4,7 +4,10 @@ import gb.core.api.InputState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.ExperimentalUnsignedTypes
+import kotlin.OptIn
 
+@OptIn(ExperimentalUnsignedTypes::class)
 class JoypadTest {
     @Test
     fun `read returns all ones when nothing is pressed`() {
