@@ -30,6 +30,7 @@ class Cpu(
         const val LD_HL_FROM_A_INC: Int = 8
         const val LD_R_FROM_HL: Int = 8
         const val LD_HL_FROM_R: Int = 8
+        const val BIT_R: Int = 8
     }
 
     val registers = Registers()
@@ -53,6 +54,7 @@ class Cpu(
     ): Int =
         when (opcode) {
             0x00 -> executeNop()
+            0xCB -> executeCbPrefixed()
             // 即値ロード
             0x06 -> executeLdImmediate(::setB) // LD B, n
             0x0E -> executeLdImmediate(::setC) // LD C, n
@@ -153,6 +155,30 @@ class Cpu(
         }
 
     /**
+     * CB プレフィックス付き命令の実行。
+     *
+     * 0xCB オペコードを読み取ったあと、次の 1 バイトを拡張オペコードとして解釈する。
+     */
+    private fun executeCbPrefixed(): Int {
+        val pc = registers.pc
+        val cbOpcode = bus.readByte(pc).toInt()
+        // 拡張オペコード 1 バイト分 PC を進める
+        registers.pc = (pc.toInt() + 1).toUShort()
+        return executeCbByOpcode(cbOpcode)
+    }
+
+    /**
+     * CB xx 命令群のデコード。
+     *
+     * 現時点では BIT 命令のごく一部（BIT 4, A）のみを実装。
+     */
+    private fun executeCbByOpcode(cbOpcode: Int): Int =
+        when (cbOpcode) {
+            0x67 -> executeBitOnRegister(bit = 4, value = registers.a) // BIT 4, A
+            else -> error("Unknown CB opcode: 0x${cbOpcode.toString(16)} at PC=0x${registers.pc.toString(16)}")
+        }
+
+    /**
      * NOP 命令: 何もしないで 4 サイクル消費する。
      */
     private fun executeNop(): Int = Cycles.NOP
@@ -233,6 +259,25 @@ class Cpu(
         val result = (before - 1u).toUShort()
         set(result)
         return Cycles.DEC_16
+    }
+
+    /**
+     * BIT b, r 命令（レジスタ版）の共通処理。
+     *
+     * - 指定ビットが 0 なら Z=1、1 なら Z=0
+     * - N=0, H=1, C は変更しない
+     * - サイクル数: 8
+     */
+    private fun executeBitOnRegister(
+        bit: Int,
+        value: UByte,
+    ): Int {
+        val mask = (1 shl bit).toUByte()
+        registers.flagZ = (value and mask) == 0u.toUByte()
+        registers.flagN = false
+        registers.flagH = true
+        // flagC は変更しない
+        return Cycles.BIT_R
     }
 
     /**

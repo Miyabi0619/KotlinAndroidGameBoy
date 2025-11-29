@@ -422,6 +422,89 @@ class Cpu(
 という共通ルールに従うため、既存のヘルパー（`executeLdRegister` / `executeLdRegisterFromHL` / `executeLdHLFromRegister`）を再利用しつつ、  
 `executeByOpcode` に opcode と対応するターゲット／ソースレジスタの組み合わせを順に追加していく方針で実装していく。
 
+### 7.5 CB プレフィックス命令と BIT 4, A（2025-11-29）
+
+なかよしバッヂ周りの解析に必要になるため、CB プレフィックス (`0xCB`) と、その中のごく一部だけを先行実装した。
+
+- **CB プレフィックスの扱い**
+  - メインの `executeInstruction()` で `0xCB` を検出したら、次の 1 バイトを「拡張オペコード」として読み取り、専用のディスパッチに渡す。
+  - 実装イメージ:
+
+```35:62:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Cpu.kt
+    private object Cycles {
+        const val NOP: Int = 4
+        const val LD_A_N: Int = 8
+        const val LD_R_N: Int = 8
+        const val INC_A: Int = 4
+        const val INC_16: Int = 8
+        const val DEC_16: Int = 8
+        const val LD_R_R: Int = 4
+        const val LD_A_FROM_HL: Int = 8
+        const val LD_HL_FROM_A: Int = 8
+        const val LD_A_FROM_HL_INC: Int = 8
+        const val LD_HL_FROM_A_INC: Int = 8
+        const val LD_R_FROM_HL: Int = 8
+        const val LD_HL_FROM_R: Int = 8
+        const val BIT_R: Int = 8
+    }
+
+    private fun executeByOpcode(
+        opcode: Int,
+        pcBefore: UShort,
+    ): Int =
+        when (opcode) {
+            0x00 -> executeNop()
+            0xCB -> executeCbPrefixed()
+            ...
+        }
+
+    private fun executeCbPrefixed(): Int {
+        val pc = registers.pc
+        val cbOpcode = bus.readByte(pc).toInt()
+        // 拡張オペコード 1 バイト分 PC を進める
+        registers.pc = (pc.toInt() + 1).toUShort()
+        return executeCbByOpcode(cbOpcode)
+    }
+```
+
+- **実装済みの CB 命令**
+  - 現時点では **`BIT 4, A`（CB 67）** のみ実装:
+
+```156:182:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Cpu.kt
+    private fun executeCbByOpcode(cbOpcode: Int): Int =
+        when (cbOpcode) {
+            0x67 -> executeBitOnRegister(bit = 4, value = registers.a) // BIT 4, A
+            else -> error("Unknown CB opcode: 0x${cbOpcode.toString(16)} at PC=0x${registers.pc.toString(16)}")
+        }
+
+    private fun executeBitOnRegister(
+        bit: Int,
+        value: UByte,
+    ): Int {
+        val mask = (1 shl bit).toUByte()
+        registers.flagZ = (value and mask) == 0u.toUByte()
+        registers.flagN = false
+        registers.flagH = true
+        // flagC は変更しない
+        return Cycles.BIT_R
+    }
+```
+
+- **BIT 4, A の仕様**
+  - 対象: A レジスタの **bit 4**（0 から数えて 4 番目、値 `0x10` のビット）を検査する。
+  - フラグ挙動（Game Boy 仕様）:
+    - `Z`: 対象ビットが 0 なら 1、1 なら 0
+    - `N`: 0
+    - `H`: 1
+    - `C`: 変更なし
+  - レジスタ A 自体の値は一切変えない。
+  - サイクル数:
+    - `BIT b, r`（レジスタ版）は 8 サイクル
+    - `BIT b, (HL)`（メモリアクセス版）は 12 サイクル（現時点では未実装）
+
+この BIT 4, A は、なかよしバッヂ周辺のコードで「フラグチェックや条件分岐の前段としてよく使われる」ため、  
+ACE を追ううえで必要になりそうなところから先に実装している。今後、必要に応じて他の CB xx（シフト／ローテート／他ビット検査）も追加していく。
+
 ---
 
 ## 参考資料

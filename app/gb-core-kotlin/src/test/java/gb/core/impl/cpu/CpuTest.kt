@@ -101,6 +101,48 @@ class CpuTest {
     }
 
     @Test
+    fun `CB 67 BIT 4 A sets Z flag depending on bit 4 of A`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0xCB (prefix), 0x0101: 0x67 (BIT 4, A)
+        memory[0x0100] = 0xCBu
+        memory[0x0101] = 0x67u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x10u // bit4 = 1
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles1 = cpu.executeInstruction()
+
+        // bit4=1 なので Z=0、N=0、H=1、Cは維持
+        assertEquals(8, cycles1)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+
+        // もう一度同じ命令を実行する準備: PC を戻し、A の bit4 を 0 にする
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x00u
+
+        val cycles2 = cpu.executeInstruction()
+
+        // bit4=0 なので Z=1、N=0、H=1、Cはそのまま
+        assertEquals(8, cycles2)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
     fun `INC A increments value and updates flags`() {
         val memory = UByteArray(MEMORY_SIZE) { 0x00u }
         val bus = InMemoryBus(memory)
