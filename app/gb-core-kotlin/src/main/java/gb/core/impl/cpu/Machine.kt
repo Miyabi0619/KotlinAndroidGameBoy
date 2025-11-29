@@ -18,6 +18,7 @@ class Machine(
     private val bus: SystemBus
 
     val cpu: Cpu
+    val ppu: Ppu
 
     /**
      * 1 命令を実行し、その間に消費した総サイクル数（割り込みサービスを含む）を返す。
@@ -30,6 +31,7 @@ class Machine(
     fun stepInstruction(): Int {
         val cycles = cpu.executeInstruction()
         timer.step(cycles)
+        ppu.step(cycles)
 
         val interruptCycles = handleInterrupts()
         if (interruptCycles > 0) {
@@ -46,15 +48,18 @@ class Machine(
 
     init {
         val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
+        val vram = UByteArray(0x2000) { 0u }
         bus =
             SystemBus(
                 rom = rom,
+                vram = vram,
                 cartridgeRam = cartridgeRam,
                 interruptController = interruptController,
                 timer = timer,
                 mbc1 = mbc1,
             )
         cpu = Cpu(bus)
+        ppu = Ppu(vram)
     }
 
     private fun createMbc1AndRamIfNeeded(rom: UByteArray): Pair<Mbc1?, UByteArray?> {

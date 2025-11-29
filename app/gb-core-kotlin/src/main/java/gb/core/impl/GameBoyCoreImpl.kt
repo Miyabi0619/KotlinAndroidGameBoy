@@ -86,7 +86,7 @@ class GameBoyCoreImpl : GameBoyCore {
 
         frameIndex += 1
 
-        val pixels = createStubFrameBuffer()
+        val pixels = m.ppu.renderFrame()
         val stats =
             FrameStats(
                 frameIndex = frameIndex,
@@ -116,20 +116,6 @@ class GameBoyCoreImpl : GameBoyCore {
                 message = "loadState is not implemented yet.",
             ),
         )
-    }
-
-    /**
-     * 仮のフレームバッファを生成する。
-     *
-     * 現状は単色（黒）の画面を返すのみで、PPU の実装が整い次第置き換える。
-     */
-    private fun createStubFrameBuffer(): IntArray {
-        val width = 160
-        val height = 144
-        val pixelCount = width * height
-        val blackArgb = 0xFF000000.toInt()
-
-        return IntArray(pixelCount) { blackArgb }
     }
 }
 

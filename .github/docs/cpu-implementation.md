@@ -1131,6 +1131,120 @@ PPU の本格的な実装（LCDC/STAT、タイル／背景／スプライト、�
 
 ---
 
+### 8.4 Machine と GameBoyCoreImpl への統合（CPU 実行ループ＋フレーム生成）
+
+#### Machine 側
+
+`Machine` は CPU / SystemBus / Timer / InterruptController を束ねるクラスだったが、  
+ここに PPU もぶら下げて「**1 命令実行ごとに PPU も時間を進める**」ようにした。
+
+```12:45:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Machine.kt
+class Machine(
+    rom: UByteArray,
+) {
+    private val interruptController = InterruptController()
+    private val timer = Timer(interruptController)
+
+    private val bus: SystemBus
+
+    val cpu: Cpu
+    val ppu: Ppu
+
+    fun stepInstruction(): Int {
+        val cycles = cpu.executeInstruction()
+        timer.step(cycles)
+        ppu.step(cycles)
+        val interruptCycles = handleInterrupts()
+        if (interruptCycles > 0) {
+            timer.step(interruptCycles)
+        }
+        return cycles + interruptCycles
+    }
+
+    init {
+        val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
+        val vram = UByteArray(0x2000) { 0u }
+        bus =
+            SystemBus(
+                rom = rom,
+                vram = vram,
+                cartridgeRam = cartridgeRam,
+                interruptController = interruptController,
+                timer = timer,
+                mbc1 = mbc1,
+            )
+        cpu = Cpu(bus)
+        ppu = Ppu(vram)
+    }
+}
+```
+
+- VRAM 用の `UByteArray(0x2000)` を Machine 側で確保し、`SystemBus` と `Ppu` の両方に渡すことで、
+  - CPU からの VRAM 書き込み（0x8000–0x9FFF）
+  - PPU の `renderFrame()` での VRAM 参照
+  が同じバッファを共有する構造になっている。
+- `stepInstruction()` 内で CPU とタイマに加えて `ppu.step(cycles)` も呼ぶようにし、  
+  将来的に「CPU サイクル数ベースの LCD タイミング」をここで表現できるようにしている。
+
+#### GameBoyCoreImpl 側
+
+`GameBoyCoreImpl` は、これまではスタブのフレームバッファを自前で生成していたが、  
+Machine 経由で PPU からフレームバッファをもらう形に変更した。
+
+```22:75:app/gb-core-kotlin/src/main/java/gb/core/impl/GameBoyCoreImpl.kt
+@OptIn(ExperimentalUnsignedTypes::class)
+class GameBoyCoreImpl : GameBoyCore {
+    private var rom: ByteArray? = null
+    private var frameIndex: Long = 0
+    private var machine: Machine? = null
+
+    override fun runFrame(input: InputState): CoreResult<FrameResult> {
+        val currentRom = rom
+        if (currentRom == null) {
+            return CoreResult.error(CoreError.RomNotLoaded)
+        }
+
+        if (machine == null) {
+            machine = Machine(currentRom.toUByteArray())
+        }
+        val m = machine!!
+
+        val targetCyclesPerFrame = 70_224
+        var accumulatedCycles = 0
+        while (accumulatedCycles < targetCyclesPerFrame) {
+            accumulatedCycles += m.stepInstruction()
+        }
+
+        frameIndex += 1
+
+        val pixels = m.ppu.renderFrame()
+        val stats =
+            FrameStats(
+                frameIndex = frameIndex,
+                cpuCycles = accumulatedCycles.toLong(),
+                fpsEstimate = null,
+            )
+
+        return CoreResult.success(FrameResult(frameBuffer = pixels, stats = stats))
+    }
+}
+```
+
+ポイント:
+
+- 1 フレームぶんのサイクル数として **70224 サイクル** を目安にループし、`Machine.stepInstruction()` を回す。
+- ループ終了後、`machine.ppu.renderFrame()` の結果をそのまま `FrameResult.frameBuffer` として返す。
+- これにより、UI 側から見ると
+  - `runFrame()` を呼ぶたびに CPU/タイマ/割り込み/PPU が 1 フレームぶん進み、
+  - その時点での画面（現状は真っ黒）が `IntArray` で得られる
+  というインターフェイスになっている。
+
+今の段階では PPU が「VRAM を見ずに真っ黒を返すだけ」だが、  
+今後タイル描画や背景スクロールなどを実装していく際には、Machine と GameBoyCoreImpl のこの構造を保ったまま  
+PPU 内部だけを差し替えていけるようになっている。
+
+---
+
 ## 参考資料
 
 - [Game Boy CPU Manual](https://ia803208.us.archive.org/30/items/GameBoyProgManVer1.1/GameBoyProgManVer1.1.pdf)（英語、公式マニュアル）
