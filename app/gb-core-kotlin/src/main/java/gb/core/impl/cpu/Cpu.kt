@@ -23,6 +23,8 @@ class Cpu(
         const val LD_R_R: Int = 4
         const val LD_A_FROM_HL: Int = 8
         const val LD_HL_FROM_A: Int = 8
+        const val LD_R_FROM_HL: Int = 8
+        const val LD_HL_FROM_R: Int = 8
     }
 
     val registers = Registers()
@@ -50,6 +52,9 @@ class Cpu(
             0x3C -> executeIncA()
             0x7E -> executeLdAFromHL()
             0x77 -> executeLdHLFromA()
+            // レジスタ <-> (HL)
+            0x46 -> executeLdRegisterFromHL(::setB) // LD B, (HL)
+            0x70 -> executeLdHLFromRegister(registers.b) // LD (HL), B
             // レジスタ間コピー（A <-> その他）
             0x47 -> executeLdRegister(::setB, registers.a) // LD B, A
             0x4F -> executeLdRegister(::setC, registers.a) // LD C, A
@@ -139,6 +144,29 @@ class Cpu(
         val address = registers.hl
         bus.writeByte(address, registers.a)
         return Cycles.LD_HL_FROM_A
+    }
+
+    /**
+     * LD r, (HL) 系命令の共通処理: 汎用レジスタ ← [HL]。
+     *
+     * フラグは変更しない。
+     */
+    private fun executeLdRegisterFromHL(setTarget: (UByte) -> Unit): Int {
+        val address = registers.hl
+        val value = bus.readByte(address)
+        setTarget(value)
+        return Cycles.LD_R_FROM_HL
+    }
+
+    /**
+     * LD (HL), r 系命令の共通処理: [HL] ← 汎用レジスタ。
+     *
+     * フラグは変更しない。
+     */
+    private fun executeLdHLFromRegister(source: UByte): Int {
+        val address = registers.hl
+        bus.writeByte(address, source)
+        return Cycles.LD_HL_FROM_R
     }
 
     /**
