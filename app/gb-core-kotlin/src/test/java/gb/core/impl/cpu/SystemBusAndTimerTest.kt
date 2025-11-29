@@ -22,6 +22,7 @@ class SystemBusAndTimerTest {
                 rom = rom,
                 interruptController = interruptController,
                 timer = timer,
+                joypad = Joypad(interruptController),
             )
 
         // ROM 読み取り
@@ -49,6 +50,7 @@ class SystemBusAndTimerTest {
                 rom = rom,
                 interruptController = interruptController,
                 timer = timer,
+                joypad = Joypad(interruptController),
             )
 
         // IE: すべての割り込みを許可

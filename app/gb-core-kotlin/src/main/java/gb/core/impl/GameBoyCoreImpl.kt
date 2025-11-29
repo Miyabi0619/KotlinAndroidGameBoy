@@ -76,6 +76,9 @@ class GameBoyCoreImpl : GameBoyCore {
         }
         val m = machine!!
 
+        // このフレームの入力状態を Joypad に反映
+        m.updateInput(input)
+
         // 1 フレームぶんの CPU サイクルをざっくり回す
         // Game Boy は約 70224 サイクル / フレーム（59.7Hz）なので、それに近い値を使う。
         val targetCyclesPerFrame = 70_224

@@ -14,6 +14,7 @@ class Machine(
 ) {
     private val interruptController = InterruptController()
     private val timer = Timer(interruptController)
+    private val joypad = Joypad(interruptController)
 
     private val bus: SystemBus
 
@@ -41,6 +42,15 @@ class Machine(
         return cycles + interruptCycles
     }
 
+    /**
+     * 現在の入力状態を Joypad に反映する。
+     *
+     * - 1 フレームの先頭で GameBoyCoreImpl から呼び出される想定。
+     */
+    fun updateInput(input: gb.core.api.InputState) {
+        joypad.updateInput(input)
+    }
+
     private fun handleInterrupts(): Int {
         val pending = interruptController.nextPending(cpu.isInterruptsEnabled()) ?: return 0
         return cpu.serviceInterrupt(pending)
@@ -57,6 +67,7 @@ class Machine(
                 interruptController = interruptController,
                 timer = timer,
                 mbc1 = mbc1,
+                joypad = joypad,
             )
         cpu = Cpu(bus)
         ppu = Ppu(vram)

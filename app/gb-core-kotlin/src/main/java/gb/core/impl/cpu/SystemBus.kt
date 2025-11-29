@@ -26,18 +26,15 @@ class SystemBus(
     private val cartridgeRam: UByteArray? = null,
     private val interruptController: InterruptController,
     private val timer: Timer,
+    joypad: Joypad,
     /**
      * ROM が MBC1 カートリッジであれば Mbc1 インスタンスを渡す。
      * それ以外のカートリッジでは null（ノーマッパ）とする。
      */
     private val mbc1: Mbc1? = null,
 ) : Bus {
-    /**
-     * Joypad 入力レジスタ（FF00）。
-     *
-     * - 現時点では単純なバッファとしてのみ保持し、入力ロジックは後続で実装する。
-     */
-    private var joypadReg: UByte = 0xFFu
+    /** Joypad 入力レジスタ（FF00）は [joypad] に委譲する。 */
+    private val joypad: Joypad = joypad
 
     /**
      * 汎用 I/O レジスタ（FF10–FF7F）のバックアップ。
@@ -83,7 +80,7 @@ class SystemBus(
             }
             addr in 0xFE00..0xFE9F -> oam[addr - 0xFE00]
             addr in 0xFEA0..0xFEFF -> 0xFFu // 未使用領域
-            addr == 0xFF00 -> joypadReg
+            addr == 0xFF00 -> joypad.read()
             addr in 0xFF04..0xFF07 -> {
                 // タイマレジスタ（DIV/TIMA/TMA/TAC）
                 val offset = addr - 0xFF04
@@ -137,7 +134,7 @@ class SystemBus(
                 // 未使用領域: 書き込みは無視
             }
             0xFF00 -> {
-                joypadReg = value
+                joypad.write(value)
             }
             in 0xFF04..0xFF07 -> {
                 val offset = addr - 0xFF04

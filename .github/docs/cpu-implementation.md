@@ -1295,6 +1295,200 @@ PPU 内部だけを差し替えていけるようになっている。
 
 ---
 
+### 8.5 Joypad（FF00）と JOYPAD 割り込み（2025-11-29）
+
+#### Joypad レジスタ FF00 の仕様（簡略版）
+
+Game Boy の Joypad レジスタ FF00 は、上位ビットで「どのグループを読むか」を選び、  
+下位 4bit に実際のボタン状態（押されていれば 0）が入る形式になっている。
+
+- bit7-6: 常に 1
+- bit5 (P15): 0 のとき「ボタン（A/B/SELECT/START）」グループを選択
+- bit4 (P14): 0 のとき「方向キー（Right/Left/Up/Down）」グループを選択
+- bit3-0:
+  - ボタン選択時（P15=0）:
+    - bit0: A
+    - bit1: B
+    - bit2: SELECT
+    - bit3: START
+  - 方向キー選択時（P14=0）:
+    - bit0: RIGHT
+    - bit1: LEFT
+    - bit2: UP
+    - bit3: DOWN
+- 押されていない: 1 / 押されている: 0
+
+#### Joypad クラス
+
+この挙動を `Joypad` クラスに切り出し、`SystemBus` から FF00 の read/write を委譲するようにした。
+
+```1:72:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Joypad.kt
+class Joypad(
+    private val interruptController: InterruptController,
+) {
+    private var selectMask: Int = 0x30
+    private var inputState: InputState = InputState()
+
+    fun write(value: UByte) {
+        selectMask = value.toInt() and 0x30
+    }
+
+    fun read(): UByte {
+        var result = 0xC0 or selectMask or 0x0F
+
+        if ((selectMask and 0x10) == 0) {
+            if (inputState.right) result = result and 0b1110
+            if (inputState.left) result = result and 0b1101
+            if (inputState.up) result = result and 0b1011
+            if (inputState.down) result = result and 0b0111
+        }
+
+        if ((selectMask and 0x20) == 0) {
+            if (inputState.a) result = result and 0b1110
+            if (inputState.b) result = result and 0b1101
+            if (inputState.select) result = result and 0b1011
+            if (inputState.start) result = result and 0b0111
+        }
+
+        return result.toUByte()
+    }
+
+    fun updateInput(newState: InputState) {
+        val prev = inputState
+        inputState = newState
+
+        val pressedNow =
+            listOf(
+                !prev.a && newState.a,
+                !prev.b && newState.b,
+                !prev.select && newState.select,
+                !prev.start && newState.start,
+                !prev.right && newState.right,
+                !prev.left && newState.left,
+                !prev.up && newState.up,
+                !prev.down && newState.down,
+            )
+
+        if (pressedNow.any { it }) {
+            interruptController.request(InterruptController.Type.JOYPAD)
+        }
+    }
+}
+```
+
+ポイント:
+
+- `selectMask` に P14/P15（bit4/5）だけを保持し、`read()` 時に `0xC0 | selectMask | 0x0F` からスタートして、  
+  押されているボタンのビットだけ 0 に落とす。
+- `updateInput()` では前回状態と比較し、「新たに押されたボタン」があれば JOYPAD 割り込みを要求する。
+  - 実機では選択ラインやエッジ検出などもう少し複雑だが、ACE の解析には「押したら割り込みが飛ぶ」程度で十分。
+
+#### SystemBus への統合
+
+`SystemBus` コンストラクタに `joypad: Joypad` を追加し、FF00 の read/write を Joypad に委譲するよう変更した。
+
+```20:47:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/SystemBus.kt
+class SystemBus(
+    private val rom: UByteArray,
+    /* ... */
+    private val interruptController: InterruptController,
+    private val timer: Timer,
+    joypad: Joypad,
+    private val mbc1: Mbc1? = null,
+) : Bus {
+    private val joypad: Joypad = joypad
+
+    private fun readByteInternal(addr: Int): UByte =
+        when {
+            /* ... */
+            addr in 0xFE00..0xFE9F -> oam[addr - 0xFE00]
+            addr in 0xFEA0..0xFEFF -> 0xFFu
+            addr == 0xFF00 -> joypad.read()
+            addr in 0xFF04..0xFF07 -> { /* Timer */ }
+            /* ... */
+        }
+
+    override fun writeByte(address: UShort, value: UByte) {
+        val addr = address.toInt()
+        when (addr) {
+            /* ... */
+            0xFF00 -> joypad.write(value)
+            in 0xFF04..0xFF07 -> { /* Timer */ }
+            /* ... */
+        }
+    }
+}
+```
+
+#### Machine と GameBoyCoreImpl からの入力反映
+
+`Machine` は Joypad を生成して `SystemBus` に渡し、さらに `updateInput` を公開して  
+上位から入力を反映できるようにしている。
+
+```12:41:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Machine.kt
+class Machine(
+    rom: UByteArray,
+) {
+    private val interruptController = InterruptController()
+    private val timer = Timer(interruptController)
+    private val joypad = Joypad(interruptController)
+    /* ... */
+
+    fun stepInstruction(): Int { /* CPU + Timer + PPU */ }
+
+    fun updateInput(input: gb.core.api.InputState) {
+        joypad.updateInput(input)
+    }
+
+    init {
+        val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
+        val vram = UByteArray(0x2000) { 0u }
+        bus =
+            SystemBus(
+                rom = rom,
+                vram = vram,
+                cartridgeRam = cartridgeRam,
+                interruptController = interruptController,
+                timer = timer,
+                mbc1 = mbc1,
+                joypad = joypad,
+            )
+        cpu = Cpu(bus)
+        ppu = Ppu(vram)
+    }
+}
+```
+
+`GameBoyCoreImpl.runFrame()` 側では、フレームの最初に `Machine.updateInput(input)` を呼び出し、  
+その後で 1 フレームぶんの CPU 実行ループを回す形になっている。
+
+```65:85:app/gb-core-kotlin/src/main/java/gb/core/impl/GameBoyCoreImpl.kt
+override fun runFrame(input: InputState): CoreResult<FrameResult> {
+    /* ROM チェックと Machine 初期化 */
+    val m = machine!!
+
+    // このフレームの入力状態を Joypad に反映
+    m.updateInput(input)
+
+    val targetCyclesPerFrame = 70_224
+    var accumulatedCycles = 0
+    while (accumulatedCycles < targetCyclesPerFrame) {
+        accumulatedCycles += m.stepInstruction()
+    }
+    /* フレームバッファ取得と FrameResult 作成 */
+}
+```
+
+これで、
+
+- アプリ側の `InputState` → Joypad → FF00 → CPU / ROM
+- 新規押下 → `InterruptController.request(JOYPAD)` → 割り込みハンドラ
+
+という線が通り、ポケモンのメニュー操作や ACE チャート上の「ボタン入力によるフラグ変更」を  
+エミュレータ内でそのまま追えるようになった。
+
+---
+
 ## 参考資料
 
 - [Game Boy CPU Manual](https://ia803208.us.archive.org/30/items/GameBoyProgManVer1.1/GameBoyProgManVer1.1.pdf)（英語、公式マニュアル）
