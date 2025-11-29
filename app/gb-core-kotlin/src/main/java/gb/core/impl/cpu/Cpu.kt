@@ -20,6 +20,7 @@ class Cpu(
         const val NOP: Int = 4
         const val LD_A_N: Int = 8
         const val INC_A: Int = 4
+        const val INC_HL: Int = 8
         const val LD_R_R: Int = 4
         const val LD_A_FROM_HL: Int = 8
         const val LD_HL_FROM_A: Int = 8
@@ -50,6 +51,7 @@ class Cpu(
             0x00 -> executeNop()
             0x3E -> executeLdAN()
             0x3C -> executeIncA()
+            0x23 -> executeIncHL()
             0x7E -> executeLdAFromHL()
             0x77 -> executeLdHLFromA()
             // レジスタ <-> (HL)
@@ -117,6 +119,28 @@ class Cpu(
         // flagC は変更しない
 
         return Cycles.INC_A
+    }
+
+    /**
+     * INC HL 命令: HL レジスタを 1 増加させる。
+     *
+     * - オペコード: 0x23
+     * - フラグ:
+     *   - Z: 変更なし
+     *   - N: 0
+     *   - H/C: 16bit 加算に応じて変化（現時点では簡略化し、後続タスクで精密化する）
+     * - サイクル数: 8
+     */
+    private fun executeIncHL(): Int {
+        val before = registers.hl
+        val result = (before + 1u).toUShort()
+
+        registers.hl = result
+
+        // 簡易版フラグ更新: N は 0、Z/H/C は今は変更しない（仕様詰めは後続タスク）。
+        registers.flagN = false
+
+        return Cycles.INC_HL
     }
 
     /**

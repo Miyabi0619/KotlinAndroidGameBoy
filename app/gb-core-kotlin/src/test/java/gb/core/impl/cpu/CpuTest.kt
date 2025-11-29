@@ -95,6 +95,34 @@ class CpuTest {
     }
 
     @Test
+    fun `INC HL increments 16bit register and takes 8 cycles`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x23 (INC HL)
+        memory[0x0100] = 0x23u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0x1234u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x1235u.toUShort(), cpu.registers.hl)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // 現時点の実装では N だけ 0 にし、その他のフラグは変更しない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
     fun `LD B A copies value from A to B without touching flags`() {
         val memory = UByteArray(MEMORY_SIZE) { 0x00u }
         val bus = InMemoryBus(memory)
