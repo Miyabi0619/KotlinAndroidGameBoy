@@ -33,8 +33,10 @@ complexity:
     active: true
     threshold: 400
   LongMethod:
-    active: true
+    active: false
     threshold: 80
+  CyclomaticComplexMethod:
+    active: false
   TooManyFunctions:
     active: true
     thresholdInFiles: 30

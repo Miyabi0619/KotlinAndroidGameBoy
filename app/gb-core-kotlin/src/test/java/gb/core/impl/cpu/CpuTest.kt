@@ -94,6 +94,66 @@ class CpuTest {
         assertEquals(true, cpu.registers.flagH)
     }
 
+    @Test
+    fun `LD B A copies value from A to B without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x47 (LD B, A)
+        memory[0x0100] = 0x47u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x12u
+        cpu.registers.b = 0x00u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0x12u.toUByte(), cpu.registers.b)
+        assertEquals(0x12u.toUByte(), cpu.registers.a)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `LD A B copies value from B to A without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x78 (LD A, B)
+        memory[0x0100] = 0x78u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x00u
+        cpu.registers.b = 0x34u
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0x34u.toUByte(), cpu.registers.a)
+        assertEquals(0x34u.toUByte(), cpu.registers.b)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

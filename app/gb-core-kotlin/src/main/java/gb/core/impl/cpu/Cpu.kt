@@ -6,7 +6,7 @@ package gb.core.impl.cpu
  * - [registers]: レジスタとフラグの状態
  * - [bus]: メモリアクセス用インターフェース
  *
- * 現時点では NOP / LD A, n / INC A のみをサポートし、
+ * 現時点では NOP / LD A, n / INC A / 一部のレジスタ間コピーのみをサポートし、
  * それ以外のオペコードは例外を投げる。後続タスクで命令セットを段階的に拡張していく。
  */
 class Cpu(
@@ -20,6 +20,7 @@ class Cpu(
         const val NOP: Int = 4
         const val LD_A_N: Int = 8
         const val INC_A: Int = 4
+        const val LD_R_R: Int = 4
     }
 
     val registers = Registers()
@@ -34,13 +35,33 @@ class Cpu(
         // 次の命令に備えて PC を 1 バイト分進める。
         registers.pc = (pcBefore.toInt() + 1).toUShort()
 
-        return when (opcode) {
+        return executeByOpcode(opcode, pcBefore)
+    }
+
+    private fun executeByOpcode(
+        opcode: Int,
+        pcBefore: UShort,
+    ): Int =
+        when (opcode) {
             0x00 -> executeNop()
             0x3E -> executeLdAN()
             0x3C -> executeIncA()
+            // レジスタ間コピー（A <-> その他）
+            0x47 -> executeLdRegister(::setB, registers.a) // LD B, A
+            0x4F -> executeLdRegister(::setC, registers.a) // LD C, A
+            0x57 -> executeLdRegister(::setD, registers.a) // LD D, A
+            0x5F -> executeLdRegister(::setE, registers.a) // LD E, A
+            0x67 -> executeLdRegister(::setH, registers.a) // LD H, A
+            0x6F -> executeLdRegister(::setL, registers.a) // LD L, A
+
+            0x78 -> executeLdRegister(::setA, registers.b) // LD A, B
+            0x79 -> executeLdRegister(::setA, registers.c) // LD A, C
+            0x7A -> executeLdRegister(::setA, registers.d) // LD A, D
+            0x7B -> executeLdRegister(::setA, registers.e) // LD A, E
+            0x7C -> executeLdRegister(::setA, registers.h) // LD A, H
+            0x7D -> executeLdRegister(::setA, registers.l) // LD A, L
             else -> error("Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}")
         }
-    }
 
     /**
      * NOP 命令: 何もしないで 4 サイクル消費する。
@@ -87,5 +108,48 @@ class Cpu(
         // flagC は変更しない
 
         return Cycles.INC_A
+    }
+
+    /**
+     * レジスタ間コピーの共通処理。
+     *
+     * @param setTarget 値を書き込む先のレジスタセッター
+     * @param source コピー元の値
+     */
+    private fun executeLdRegister(
+        setTarget: (UByte) -> Unit,
+        source: UByte,
+    ): Int {
+        setTarget(source)
+        return Cycles.LD_R_R
+    }
+
+    // セッター群（ラムダキャプチャを避けて明示的な関数参照にする）
+    private fun setA(value: UByte) {
+        registers.a = value
+    }
+
+    private fun setB(value: UByte) {
+        registers.b = value
+    }
+
+    private fun setC(value: UByte) {
+        registers.c = value
+    }
+
+    private fun setD(value: UByte) {
+        registers.d = value
+    }
+
+    private fun setE(value: UByte) {
+        registers.e = value
+    }
+
+    private fun setH(value: UByte) {
+        registers.h = value
+    }
+
+    private fun setL(value: UByte) {
+        registers.l = value
     }
 }
