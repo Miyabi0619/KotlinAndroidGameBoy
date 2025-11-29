@@ -25,6 +25,8 @@ class Cpu(
         const val LD_R_R: Int = 4
         const val LD_A_FROM_HL: Int = 8
         const val LD_HL_FROM_A: Int = 8
+        const val LD_A_FROM_HL_INC: Int = 8
+        const val LD_HL_FROM_A_INC: Int = 8
         const val LD_R_FROM_HL: Int = 8
         const val LD_HL_FROM_R: Int = 8
     }
@@ -59,6 +61,8 @@ class Cpu(
             0x1B -> executeDecDE()
             0x33 -> executeIncSP()
             0x3B -> executeDecSP()
+            0x22 -> executeLdHLPlusFromA()
+            0x2A -> executeLdAFromHLPlus()
             0x7E -> executeLdAFromHL()
             0x77 -> executeLdHLFromA()
             // レジスタ <-> (HL)
@@ -264,6 +268,21 @@ class Cpu(
     }
 
     /**
+     * LD A, (HL+) 命令: A ← [HL]; HL ← HL + 1。
+     *
+     * - オペコード: 0x2A
+     * - フラグ: 変化なし
+     * - サイクル数: 8
+     */
+    private fun executeLdAFromHLPlus(): Int {
+        val address = registers.hl
+        val value = bus.readByte(address)
+        registers.a = value
+        registers.hl = (address + 1u).toUShort()
+        return Cycles.LD_A_FROM_HL_INC
+    }
+
+    /**
      * LD (HL), A 命令: [HL] ← A。
      *
      * - オペコード: 0x77
@@ -274,6 +293,20 @@ class Cpu(
         val address = registers.hl
         bus.writeByte(address, registers.a)
         return Cycles.LD_HL_FROM_A
+    }
+
+    /**
+     * LD (HL+), A 命令: [HL] ← A; HL ← HL + 1。
+     *
+     * - オペコード: 0x22
+     * - フラグ: 変化なし
+     * - サイクル数: 8
+     */
+    private fun executeLdHLPlusFromA(): Int {
+        val address = registers.hl
+        bus.writeByte(address, registers.a)
+        registers.hl = (address + 1u).toUShort()
+        return Cycles.LD_HL_FROM_A_INC
     }
 
     /**

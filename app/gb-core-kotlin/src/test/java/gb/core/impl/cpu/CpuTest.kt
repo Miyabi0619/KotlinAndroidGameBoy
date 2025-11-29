@@ -359,6 +359,76 @@ class CpuTest {
     }
 
     @Test
+    fun `LD HL+ A stores A then increments HL without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x22 (LD (HL+), A)
+        memory[0x0100] = 0x22u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+        cpu.registers.a = 0x5Au
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        // メモリ書き込み
+        assertEquals(0x5Au.toUByte(), memory[0xC000])
+        // HL は 1 増加
+        assertEquals(0xC001u.toUShort(), cpu.registers.hl)
+        // PC は 1 バイト進む
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // サイクル数
+        assertEquals(8, cycles)
+        // フラグは変更されない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `LD A HL+ loads then increments HL without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x2A (LD A, (HL+))
+        memory[0x0100] = 0x2Au
+        // HL が指すアドレスに値を置いておく
+        memory[0xC000] = 0x7Fu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+        cpu.registers.a = 0x00u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        // メモリからロード
+        assertEquals(0x7Fu.toUByte(), cpu.registers.a)
+        // HL は 1 増加
+        assertEquals(0xC001u.toUShort(), cpu.registers.hl)
+        // PC は 1 バイト進む
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // サイクル数
+        assertEquals(8, cycles)
+        // フラグは変更されない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
     fun `INC DE increments 16bit register and keeps flags unchanged`() {
         val memory = UByteArray(MEMORY_SIZE) { 0x00u }
         val bus = InMemoryBus(memory)
