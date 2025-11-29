@@ -43,6 +43,64 @@ class CpuTest {
     }
 
     @Test
+    fun `LD B n loads immediate value into B without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x06 (LD B, n), 0x0101: 0x12
+        memory[0x0100] = 0x06u
+        memory[0x0101] = 0x12u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.b = 0x00u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x12u.toUByte(), cpu.registers.b)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `LD H n loads immediate value into H without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x26 (LD H, n), 0x0101: 0x99
+        memory[0x0100] = 0x26u
+        memory[0x0101] = 0x99u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.h = 0x00u
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x99u.toUByte(), cpu.registers.h)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
     fun `INC A increments value and updates flags`() {
         val memory = UByteArray(MEMORY_SIZE) { 0x00u }
         val bus = InMemoryBus(memory)

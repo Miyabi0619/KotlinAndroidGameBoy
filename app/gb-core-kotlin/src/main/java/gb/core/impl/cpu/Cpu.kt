@@ -19,6 +19,7 @@ class Cpu(
     private object Cycles {
         const val NOP: Int = 4
         const val LD_A_N: Int = 8
+        const val LD_R_N: Int = 8
         const val INC_A: Int = 4
         const val INC_16: Int = 8
         const val DEC_16: Int = 8
@@ -52,7 +53,14 @@ class Cpu(
     ): Int =
         when (opcode) {
             0x00 -> executeNop()
-            0x3E -> executeLdAN()
+            // 即値ロード
+            0x06 -> executeLdImmediate(::setB) // LD B, n
+            0x0E -> executeLdImmediate(::setC) // LD C, n
+            0x16 -> executeLdImmediate(::setD) // LD D, n
+            0x1E -> executeLdImmediate(::setE) // LD E, n
+            0x26 -> executeLdImmediate(::setH) // LD H, n
+            0x2E -> executeLdImmediate(::setL) // LD L, n
+            0x3E -> executeLdImmediate(::setA) // LD A, n
             0x3C -> executeIncA()
             // 16bit INC/DEC
             0x03 -> executeIncBC()
@@ -150,19 +158,25 @@ class Cpu(
     private fun executeNop(): Int = Cycles.NOP
 
     /**
-     * LD A, n 命令: 即値 n を A レジスタにロードする。
+     * LD r, n 命令群の共通処理: 汎用レジスタ ← 即値 1 バイト。
      *
-     * - オペコード: 0x3E
-     * - フォーマット: [0x3E][n]
-     * - 動作: A ← n, PC は合計 2 バイト進む, 8 サイクル
+     * - 対象:
+     *   - 0x06: LD B, n
+     *   - 0x0E: LD C, n
+     *   - 0x16: LD D, n
+     *   - 0x1E: LD E, n
+     *   - 0x26: LD H, n
+     *   - 0x2E: LD L, n
+     *   - 0x3E: LD A, n
+     * - フラグ: 変化なし
+     * - サイクル数: 8
      */
-    private fun executeLdAN(): Int {
+    private fun executeLdImmediate(setTarget: (UByte) -> Unit): Int {
         val pc = registers.pc
         val value = bus.readByte(pc)
-        registers.a = value
-        // 即値 1 バイト分 PC を進める
+        setTarget(value)
         registers.pc = (pc.toInt() + 1).toUShort()
-        return Cycles.LD_A_N
+        return Cycles.LD_R_N
     }
 
     /**
