@@ -7,6 +7,8 @@ import gb.core.api.FrameStats
 import gb.core.api.GameBoyCore
 import gb.core.api.InputState
 import gb.core.api.SaveState
+import gb.core.impl.cpu.Machine
+import kotlin.ExperimentalUnsignedTypes
 
 /**
  * [GameBoyCore] の最低限の骨格実装。
@@ -19,9 +21,11 @@ import gb.core.api.SaveState
  * のみを行うスタブ実装である。
  * 後続タスクで CPU / PPU / メモリなどの詳細ロジックを追加していく。
  */
+@OptIn(ExperimentalUnsignedTypes::class)
 class GameBoyCoreImpl : GameBoyCore {
     private var rom: ByteArray? = null
     private var frameIndex: Long = 0
+    private var machine: Machine? = null
 
     override fun loadRom(rom: ByteArray): CoreResult<Unit> {
         if (rom.isEmpty()) {
@@ -30,8 +34,14 @@ class GameBoyCoreImpl : GameBoyCore {
             )
         }
 
-        this.rom = rom.copyOf()
+        val romCopy = rom.copyOf()
+        this.rom = romCopy
         frameIndex = 0
+
+        // Machine（CPU + SystemBus + Timer + Interrupts + MBC1）を初期化
+        val uRom = romCopy.toUByteArray()
+        machine = Machine(uRom)
+
         return CoreResult.success(Unit)
     }
 
@@ -44,7 +54,11 @@ class GameBoyCoreImpl : GameBoyCore {
         }
 
         frameIndex = 0
-        // 実際の実装では CPU レジスタやメモリなどを電源 ON 状態に初期化する。
+
+        // ROM から Machine を作り直す（電源 OFF→ON 相当）
+        val uRom = currentRom.toUByteArray()
+        machine = Machine(uRom)
+
         return CoreResult.success(Unit)
     }
 
@@ -56,13 +70,27 @@ class GameBoyCoreImpl : GameBoyCore {
             )
         }
 
+        // Machine がまだなければ ROM から初期化
+        if (machine == null) {
+            machine = Machine(currentRom.toUByteArray())
+        }
+        val m = machine!!
+
+        // 1 フレームぶんの CPU サイクルをざっくり回す
+        // Game Boy は約 70224 サイクル / フレーム（59.7Hz）なので、それに近い値を使う。
+        val targetCyclesPerFrame = 70_224
+        var accumulatedCycles = 0
+        while (accumulatedCycles < targetCyclesPerFrame) {
+            accumulatedCycles += m.stepInstruction()
+        }
+
         frameIndex += 1
 
         val pixels = createStubFrameBuffer()
         val stats =
             FrameStats(
                 frameIndex = frameIndex,
-                cpuCycles = 0L,
+                cpuCycles = accumulatedCycles.toLong(),
                 fpsEstimate = null,
             )
 
