@@ -359,6 +359,125 @@ class CpuTest {
     }
 
     @Test
+    fun `LD C D copies value from D to C without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x4A (LD C, D)
+        memory[0x0100] = 0x4Au
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.c = 0x00u
+        cpu.registers.d = 0x12u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0x12u.toUByte(), cpu.registers.c)
+        assertEquals(0x12u.toUByte(), cpu.registers.d)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `LD H L copies value from L to H without touching flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x65 (LD H, L)
+        memory[0x0100] = 0x65u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.h = 0x00u
+        cpu.registers.l = 0x34u
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0x34u.toUByte(), cpu.registers.h)
+        assertEquals(0x34u.toUByte(), cpu.registers.l)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `LD E HL loads from memory at HL into E`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x5E (LD E, (HL))
+        memory[0x0100] = 0x5Eu
+        memory[0xC000] = 0x99u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+        cpu.registers.e = 0x00u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x99u.toUByte(), cpu.registers.e)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `LD HL C stores C into memory at HL`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x71 (LD (HL), C)
+        memory[0x0100] = 0x71u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+        cpu.registers.c = 0xABu
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0xABu.toUByte(), memory[0xC000])
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
     fun `LD HL+ A stores A then increments HL without touching flags`() {
         val memory = UByteArray(MEMORY_SIZE) { 0x00u }
         val bus = InMemoryBus(memory)

@@ -54,6 +54,7 @@ class Cpu(
             0x00 -> executeNop()
             0x3E -> executeLdAN()
             0x3C -> executeIncA()
+            // 16bit INC/DEC
             0x03 -> executeIncBC()
             0x0B -> executeDecBC()
             0x23 -> executeIncHL()
@@ -61,27 +62,85 @@ class Cpu(
             0x1B -> executeDecDE()
             0x33 -> executeIncSP()
             0x3B -> executeDecSP()
+            // HL 自動インクリメント付きロード／ストア
             0x22 -> executeLdHLPlusFromA()
             0x2A -> executeLdAFromHLPlus()
+            // HL 経由のメモリアクセス（単発）
             0x7E -> executeLdAFromHL()
             0x77 -> executeLdHLFromA()
             // レジスタ <-> (HL)
             0x46 -> executeLdRegisterFromHL(::setB) // LD B, (HL)
+            0x4E -> executeLdRegisterFromHL(::setC) // LD C, (HL)
+            0x56 -> executeLdRegisterFromHL(::setD) // LD D, (HL)
+            0x5E -> executeLdRegisterFromHL(::setE) // LD E, (HL)
+            0x66 -> executeLdRegisterFromHL(::setH) // LD H, (HL)
+            0x6E -> executeLdRegisterFromHL(::setL) // LD L, (HL)
             0x70 -> executeLdHLFromRegister(registers.b) // LD (HL), B
-            // レジスタ間コピー（A <-> その他）
+            0x71 -> executeLdHLFromRegister(registers.c) // LD (HL), C
+            0x72 -> executeLdHLFromRegister(registers.d) // LD (HL), D
+            0x73 -> executeLdHLFromRegister(registers.e) // LD (HL), E
+            0x74 -> executeLdHLFromRegister(registers.h) // LD (HL), H
+            0x75 -> executeLdHLFromRegister(registers.l) // LD (HL), L
+            // 0x76 は HALT（別途実装予定）
+            // レジスタ間コピー（A -> その他）
             0x47 -> executeLdRegister(::setB, registers.a) // LD B, A
             0x4F -> executeLdRegister(::setC, registers.a) // LD C, A
             0x57 -> executeLdRegister(::setD, registers.a) // LD D, A
             0x5F -> executeLdRegister(::setE, registers.a) // LD E, A
             0x67 -> executeLdRegister(::setH, registers.a) // LD H, A
             0x6F -> executeLdRegister(::setL, registers.a) // LD L, A
-
+            // レジスタ間コピー（その他 -> A）
             0x78 -> executeLdRegister(::setA, registers.b) // LD A, B
             0x79 -> executeLdRegister(::setA, registers.c) // LD A, C
             0x7A -> executeLdRegister(::setA, registers.d) // LD A, D
             0x7B -> executeLdRegister(::setA, registers.e) // LD A, E
             0x7C -> executeLdRegister(::setA, registers.h) // LD A, H
             0x7D -> executeLdRegister(::setA, registers.l) // LD A, L
+            // レジスタ間コピー（B, C, D, E, H, L 同士）
+            // B 行
+            0x40 -> executeLdRegister(::setB, registers.b) // LD B, B
+            0x41 -> executeLdRegister(::setB, registers.c) // LD B, C
+            0x42 -> executeLdRegister(::setB, registers.d) // LD B, D
+            0x43 -> executeLdRegister(::setB, registers.e) // LD B, E
+            0x44 -> executeLdRegister(::setB, registers.h) // LD B, H
+            0x45 -> executeLdRegister(::setB, registers.l) // LD B, L
+            // C 行
+            0x48 -> executeLdRegister(::setC, registers.b) // LD C, B
+            0x49 -> executeLdRegister(::setC, registers.c) // LD C, C
+            0x4A -> executeLdRegister(::setC, registers.d) // LD C, D
+            0x4B -> executeLdRegister(::setC, registers.e) // LD C, E
+            0x4C -> executeLdRegister(::setC, registers.h) // LD C, H
+            0x4D -> executeLdRegister(::setC, registers.l) // LD C, L
+            // D 行
+            0x50 -> executeLdRegister(::setD, registers.b) // LD D, B
+            0x51 -> executeLdRegister(::setD, registers.c) // LD D, C
+            0x52 -> executeLdRegister(::setD, registers.d) // LD D, D
+            0x53 -> executeLdRegister(::setD, registers.e) // LD D, E
+            0x54 -> executeLdRegister(::setD, registers.h) // LD D, H
+            0x55 -> executeLdRegister(::setD, registers.l) // LD D, L
+            // E 行
+            0x58 -> executeLdRegister(::setE, registers.b) // LD E, B
+            0x59 -> executeLdRegister(::setE, registers.c) // LD E, C
+            0x5A -> executeLdRegister(::setE, registers.d) // LD E, D
+            0x5B -> executeLdRegister(::setE, registers.e) // LD E, E
+            0x5C -> executeLdRegister(::setE, registers.h) // LD E, H
+            0x5D -> executeLdRegister(::setE, registers.l) // LD E, L
+            // H 行
+            0x60 -> executeLdRegister(::setH, registers.b) // LD H, B
+            0x61 -> executeLdRegister(::setH, registers.c) // LD H, C
+            0x62 -> executeLdRegister(::setH, registers.d) // LD H, D
+            0x63 -> executeLdRegister(::setH, registers.e) // LD H, E
+            0x64 -> executeLdRegister(::setH, registers.h) // LD H, H
+            0x65 -> executeLdRegister(::setH, registers.l) // LD H, L
+            // L 行
+            0x68 -> executeLdRegister(::setL, registers.b) // LD L, B
+            0x69 -> executeLdRegister(::setL, registers.c) // LD L, C
+            0x6A -> executeLdRegister(::setL, registers.d) // LD L, D
+            0x6B -> executeLdRegister(::setL, registers.e) // LD L, E
+            0x6C -> executeLdRegister(::setL, registers.h) // LD L, H
+            0x6D -> executeLdRegister(::setL, registers.l) // LD L, L
+            // A 行の自己コピー
+            0x7F -> executeLdRegister(::setA, registers.a) // LD A, A
             else -> error("Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}")
         }
 

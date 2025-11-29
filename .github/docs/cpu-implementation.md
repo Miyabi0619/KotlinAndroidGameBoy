@@ -319,7 +319,7 @@ class Cpu(
 
 ## 7. 実装進捗ログ（2025-11-28）
 
-### 7.1 Registers / Bus / Cpu の骨格
+### 7.1 Registers / Bus / Cpu の骨格（現状）
 
 - `gb.core.impl.cpu.Registers`
   - 8bit レジスタ、PC/SP、フラグ (Z/N/H/C) を保持
@@ -327,10 +327,66 @@ class Cpu(
 - `gb.core.impl.cpu.Bus`
   - CPU がメモリにアクセスするためのインターフェース
 - `gb.core.impl.cpu.Cpu`
-  - `executeInstruction()` を実装し、現在は NOP (`0x00`) のみをサポート
+  - `executeInstruction()` を実装し、フェッチ → デコード → 実行 を 1 メソッド内で完結
   - 命令ごとのサイクル数を `Cycles` オブジェクトで管理
 
-### 7.2 テスト用 Bus と NOP テスト
+### 7.2 実装済みの命令一覧（2025-11-29 時点）
+
+現在の CPU 実装では、以下の命令が実装済みで、すべてユニットテストで動作確認済みです。
+
+- **制御系**
+  - `0x00` **NOP**: 何もしない（PC+1, 4 cycles）
+
+- **即値ロード**
+  - `0x3E` **LD A, n**: `A ← 即値 n`（PC+2, 8 cycles）
+
+- **8bit インクリメント**
+  - `0x3C` **INC A**: `A ← A + 1`
+    - フラグ: `Z`/`H` 更新、`N=0`、`C` は変更しない
+
+- **16bit インクリメント / デクリメント**
+  - 共通ヘルパー: `executeInc16(get, set)`, `executeDec16(get, set)`
+    - いずれも **フラグは一切変更しない**（Game Boy 仕様）
+  - `0x03` **INC BC**
+  - `0x0B` **DEC BC**
+  - `0x13` **INC DE**
+  - `0x1B` **DEC DE**
+  - `0x23` **INC HL**
+  - `0x33` **INC SP**
+  - `0x3B` **DEC SP**
+
+- **レジスタ間コピー（8bit）**
+  - ヘルパー: `executeLdRegister(setTarget, source)`（フラグは変更しない）
+  - A ↔ 他レジスタ:
+    - **A → 他レジスタ**
+      - `0x47` **LD B, A**
+      - `0x4F` **LD C, A**
+      - `0x57` **LD D, A**
+      - `0x5F` **LD E, A**
+      - `0x67` **LD H, A**
+      - `0x6F` **LD L, A**
+    - **他レジスタ → A**
+      - `0x78` **LD A, B**
+      - `0x79` **LD A, C**
+      - `0x7A` **LD A, D**
+      - `0x7B` **LD A, E**
+      - `0x7C` **LD A, H**
+      - `0x7D` **LD A, L**
+
+- **HL 経由のメモリアクセス**
+  - Bus 経由で `[HL]` を読む / 書く命令群。いずれもフラグは変更しない。
+  - 単発アクセス:
+    - `0x7E` **LD A, (HL)**: `A ← [HL]`
+    - `0x77` **LD (HL), A**: `[HL] ← A`
+    - `0x46` **LD B, (HL)**: `B ← [HL]`
+    - `0x70` **LD (HL), B**: `[HL] ← B`
+  - 自動インクリメント付きアクセス:
+    - `0x22` **LD (HL+), A**: `[HL] ← A; HL ← HL + 1`
+    - `0x2A` **LD A, (HL+)**: `A ← [HL]; HL ← HL + 1`
+
+これらについては、`CpuTest` で PC の進み方、レジスタ値、メモリアクセス結果、フラグの変化有無、サイクル数をそれぞれ検証済みです。
+
+### 7.3 テスト用 Bus と NOP テスト
 
 - `app/gb-core-kotlin/src/test/java/gb/core/impl/cpu/CpuTest.kt`
   - `InMemoryBus`（`UByteArray` で 64KB メモリを模倣）を使ったユニットテスト
@@ -341,7 +397,30 @@ class Cpu(
 ./gradlew :app:gb-core-kotlin:test
 ```
 
-この状態で「最小の CPU + バス + テスト」が整ったので、ここから命令セットを順に実装していく。
+この状態で「最小の CPU + バス + テスト」が整い、さらに上記の基本命令群（ロード／インクリメント／レジスタコピー）が加わったので、ここから命令セットを順に実装していく。
+
+### 7.4 今後実装していく予定の LD 系命令（レジスタ間コピー）
+
+レジスタ間 `LD` 命令は、Z80 系らしく **8×8 のマトリクス（r ← r'）** のような構造になっています。  
+現在は「A ↔ その他」と「B ↔ (HL)」のみ実装済みで、それ以外はこれから実装していきます。
+
+- **まだ未実装の主な `LD r, r'` グループ（例）**
+  - B/C/D/E/H/L 間のコピー
+    - 例: `LD B, C`, `LD D, E`, `LD H, L` など
+  - `(HL)` を絡めたコピーの残り
+    - 例: `LD C, (HL)`, `LD (HL), C`, `LD D, (HL)`, `LD (HL), D` など
+  - 即値ロードの残り
+    - 例: `LD B, n`, `LD C, n`, `LD D, n`, `LD E, n`, `LD H, n`, `LD L, n`
+  - 自動デクリメント付き HL アクセス
+    - `LD (HL-), A`, `LD A, (HL-)`（`(HL+)` の対になる命令）
+
+これらはすべて、
+
+- 「**レジスタまたはメモリから 1 バイト読み取って、別のレジスタ or [HL] に書き込むだけ**」
+- 「**フラグは変更しない（LD 系は演算を伴わないため）**」
+
+という共通ルールに従うため、既存のヘルパー（`executeLdRegister` / `executeLdRegisterFromHL` / `executeLdHLFromRegister`）を再利用しつつ、  
+`executeByOpcode` に opcode と対応するターゲット／ソースレジスタの組み合わせを順に追加していく方針で実装していく。
 
 ---
 
