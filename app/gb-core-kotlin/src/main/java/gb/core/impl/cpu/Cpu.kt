@@ -53,6 +53,8 @@ class Cpu(
         const val RET_COND_TAKEN: Int = 20
         const val RET_COND_NOT_TAKEN: Int = 8
         const val RST: Int = 16
+        const val PUSH: Int = 16
+        const val POP: Int = 12
         const val INC_R: Int = 4
         const val DEC_R: Int = 4
         const val INC_16: Int = 8
@@ -202,6 +204,15 @@ class Cpu(
             0x28 -> executeJrConditional(Condition.Z) // JR Z, e
             0x30 -> executeJrConditional(Condition.NC) // JR NC, e
             0x38 -> executeJrConditional(Condition.C) // JR C, e
+            // PUSH rr / POP rr
+            0xC5 -> executePush { registers.bc } // PUSH BC
+            0xD5 -> executePush { registers.de } // PUSH DE
+            0xE5 -> executePush { registers.hl } // PUSH HL
+            0xF5 -> executePush { registers.af } // PUSH AF
+            0xC1 -> executePop { value -> registers.bc = value } // POP BC
+            0xD1 -> executePop { value -> registers.de = value } // POP DE
+            0xE1 -> executePop { value -> registers.hl = value } // POP HL
+            0xF1 -> executePop { value -> registers.af = value } // POP AF
             // CALL nn / CALL cc, nn
             0xCD -> executeCallUnconditional() // CALL nn
             0xC4 -> executeCallConditional(Condition.NZ) // CALL NZ, nn
@@ -769,6 +780,29 @@ class Cpu(
         val high = bus.readByte((sp + 1).toUShort()).toInt()
         registers.sp = (sp + 2).toUShort()
         return ((high shl 8) or low).toUShort()
+    }
+
+    /**
+     * PUSH rr（BC/DE/HL/AF）の共通処理。
+     *
+     * - 渡された 16bit レジスタ値をスタックに積む。
+     * - サイクル数: 16
+     */
+    private fun executePush(get: () -> UShort): Int {
+        pushWord(get())
+        return Cycles.PUSH
+    }
+
+    /**
+     * POP rr（BC/DE/HL/AF）の共通処理。
+     *
+     * - スタックトップを POP して、渡された setter でレジスタに書き戻す。
+     * - サイクル数: 12
+     */
+    private fun executePop(set: (UShort) -> Unit): Int {
+        val value = popWord()
+        set(value)
+        return Cycles.POP
     }
 
     /**

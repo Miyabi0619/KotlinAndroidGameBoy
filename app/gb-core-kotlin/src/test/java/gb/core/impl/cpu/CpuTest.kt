@@ -1302,6 +1302,79 @@ class CpuTest {
         assertEquals(0xFFFCu.toUShort(), cpu.registers.sp)
     }
 
+    @Test
+    fun `PUSH and POP BC save and restore register pair`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: C5 (PUSH BC), C1 (POP BC)
+        memory[0x0100] = 0xC5u
+        memory[0x0101] = 0xC1u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFFEu
+        cpu.registers.b = 0x12u
+        cpu.registers.c = 0x34u
+
+        val cyclesPush = cpu.executeInstruction()
+        assertEquals(16, cyclesPush)
+        assertEquals(0xFFFCu.toUShort(), cpu.registers.sp)
+
+        // 別の値を入れてから POP で元に戻ることを確認
+        cpu.registers.b = 0x00u
+        cpu.registers.c = 0x00u
+
+        val cyclesPop = cpu.executeInstruction()
+        assertEquals(12, cyclesPop)
+        assertEquals(0xFFFEu.toUShort(), cpu.registers.sp)
+        assertEquals(0x12u.toUByte(), cpu.registers.b)
+        assertEquals(0x34u.toUByte(), cpu.registers.c)
+    }
+
+    @Test
+    fun `PUSH and POP AF save and restore flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: F5 (PUSH AF), F1 (POP AF)
+        memory[0x0100] = 0xF5u
+        memory[0x0101] = 0xF1u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFFEu
+
+        // 適当な A とフラグをセット
+        cpu.registers.a = 0xABu
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cyclesPush = cpu.executeInstruction()
+        assertEquals(16, cyclesPush)
+        assertEquals(0xFFFCu.toUShort(), cpu.registers.sp)
+
+        // A とフラグを別の値に変えてから POP
+        cpu.registers.a = 0x00u
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cyclesPop = cpu.executeInstruction()
+        assertEquals(12, cyclesPop)
+        assertEquals(0xFFFEu.toUShort(), cpu.registers.sp)
+
+        // A とフラグが元に戻っていること
+        assertEquals(0xABu.toUByte(), cpu.registers.a)
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

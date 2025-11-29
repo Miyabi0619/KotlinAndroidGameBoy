@@ -507,6 +507,188 @@ ACE を追ううえで必要になりそうなところから先に実装して�
 
 ---
 
+### 7.6 フロー制御（JP / JR / CALL / RET / RST）（2025-11-29）
+
+フェーズ2として、**条件分岐・サブルーチン呼び出し・割り込みベクタ飛び**に関わるフロー制御命令を実装した。  
+これにより、ポケモン赤のメインループや ACE で多用される「条件付きジャンプ → サブルーチン呼び出し → RST による固定アドレスジャンプ」が CPU 上で一通り表現できる状態になっている。
+
+#### 7.6.1 条件判定ヘルパー `Condition` / `checkCondition`
+
+すでに CPU クラス内にあった `Condition` enum（`NZ/Z/NC/C`）を流用し、  
+`JP/JR/CALL/RET` から共通で使えるヘルパー関数 `checkCondition(cond: Condition)` を追加した。
+
+- `Condition.NZ` → `!flagZ`（Z フラグが 0 のとき真）
+- `Condition.Z` → `flagZ`
+- `Condition.NC` → `!flagC`
+- `Condition.C` → `flagC`
+
+これにより、**opcode デコード側（`executeByOpcode`）では「どの条件を使うか」だけを書き、  
+実際のフラグ判定ロジックは 1 箇所に集約**されている。
+
+#### 7.6.2 汎用 16bit 読み出し `readWordAt`
+
+JP/CALL などが共通で使う「即値 16bit 読み出し」のために、  
+`readWordAt(address: UShort): UShort` を追加した。
+
+- 動作:
+  - `low = [address]`
+  - `high = [address + 1]`
+  - 戻り値は `(high << 8) | low`（リトルエンディアン）
+- 用途:
+  - `JP nn` / `JP cc, nn` のジャンプ先 `nn`
+  - `CALL nn` / `CALL cc, nn` の呼び出し先 `nn`
+
+#### 7.6.3 相対ジャンプ用の `signExtend`
+
+`JR e` / `JR cc, e` で使う **符号付き 8bit オフセット**を Int へ拡張するため、  
+`signExtend(offset: UByte): Int` を導入した。
+
+- 0x00〜0x7F → そのまま 0〜127
+- 0x80〜0xFF → -128〜-1 になるように上位ビットを 1 で埋めて拡張
+- 実際の新しい PC は  
+  - 「**即値 1 バイトを読み飛ばしたあとのアドレス**」＋ `signExtend(e)`  
+  - という形で計算している（Game Boy 仕様に合わせた実装）。
+
+#### 7.6.4 スタック操作ヘルパー `pushWord` / `popWord`
+
+CALL/RET/RST の共通処理として、16bit 単位の PUSH/POP ヘルパーを追加した。
+
+- `pushWord(value: UShort)`
+  - `spBefore = SP`
+  - `high = value 上位 8bit`, `low = 下位 8bit`
+  - `[SP-1] ← high`, `[SP-2] ← low`
+  - `SP ← SP-2`
+  - → **スタックは高アドレスから低アドレスへ伸びる** Game Boy 仕様に合わせている。
+- `popWord(): UShort`
+  - `low = [SP]`, `high = [SP+1]`
+  - `SP ← SP+2`
+  - 戻り値は `(high << 8) | low`
+
+RST/CALL/RET からは「スタックに積む／戻りアドレスを読む」という高レベルな意図だけを書き、  
+実際のアドレス計算・書き込みはこのヘルパーに任せる形になっている。
+
+#### 7.6.5 JP nn / JP cc, nn
+
+- 主な opcode:
+  - `0xC3` … `JP nn`（無条件）
+  - `0xC2` … `JP NZ, nn`
+  - `0xCA` … `JP Z, nn`
+  - `0xD2` … `JP NC, nn`
+  - `0xDA` … `JP C, nn`
+- フォーマット: `[OPCODE][low][high]`
+- 動作:
+  - 即値アドレス `nn` は `readWordAt(PC)` で取得（`PC` は opcode 実行時点で low の位置を指す）。
+  - 無条件版: `PC ← nn`
+  - 条件付き版:
+    - `pcAfterImmediate = PC + 2`（即値 2 バイトを読み飛ばした位置）
+    - 条件成立: `PC ← nn`
+    - 条件不成立: `PC ← pcAfterImmediate`（そのまま次へ）
+- サイクル:
+  - 無条件: 16
+  - 条件付き:
+    - 条件成立: 16
+    - 条件不成立: 12
+
+#### 7.6.6 JR e / JR cc, e
+
+- 主な opcode:
+  - `0x18` … `JR e`（無条件）
+  - `0x20` … `JR NZ, e`
+  - `0x28` … `JR Z, e`
+  - `0x30` … `JR NC, e`
+  - `0x38` … `JR C, e`
+- フォーマット: `[OPCODE][e]`（e は符号付き 8bit オフセット）
+- 動作:
+  - opcode フェッチ後、`PC` は即値 `e` の位置を指す。
+  - `pcAfterImmediate = PC + 1`（即値 1 バイトを読み飛ばした位置＝**次の命令の先頭**）
+  - 無条件 JR:
+    - `PC ← pcAfterImmediate + signExtend(e)`
+  - 条件付き JR:
+    - 条件成立: `PC ← pcAfterImmediate + signExtend(e)`
+    - 条件不成立: `PC ← pcAfterImmediate`（オフセットを足さない）
+- サイクル:
+  - 無条件: 12
+  - 条件付き:
+    - 条件成立: 12
+    - 条件不成立: 8
+
+#### 7.6.7 CALL nn / CALL cc, nn
+
+サブルーチン呼び出し命令は「戻りアドレスをスタックに退避 → PC を新しいアドレスへ変更」という 2 ステップで動く。
+
+- 主な opcode:
+  - `0xCD` … `CALL nn`
+  - `0xC4` … `CALL NZ, nn`
+  - `0xCC` … `CALL Z, nn`
+  - `0xD4` … `CALL NC, nn`
+  - `0xDC` … `CALL C, nn`
+- フォーマット: `[OPCODE][low][high]`
+- 動作（無条件版）:
+  - `pcImmediate = PC`（即値 low の位置）
+  - `target = readWordAt(pcImmediate)`
+  - `returnAddress = pcImmediate + 2`（即値 2 バイトを読み飛ばした、**次の命令の先頭**）
+  - `pushWord(returnAddress)`
+  - `PC ← target`
+- 動作（条件付き版）:
+  - `pcImmediate` / `target` / `pcAfterImmediate = pcImmediate + 2` を同様に計算。
+  - 条件成立:
+    - `pushWord(pcAfterImmediate)`
+    - `PC ← target`
+  - 条件不成立:
+    - `PC ← pcAfterImmediate`（即値を読み飛ばすだけ）
+- サイクル:
+  - 無条件: 24
+  - 条件付き:
+    - 条件成立: 24
+    - 条件不成立: 12
+
+#### 7.6.8 RET / RET cc
+
+サブルーチンからの復帰命令。**スタックから戻りアドレスを POP して PC に戻す**。
+
+- 主な opcode:
+  - `0xC9` … `RET`
+  - `0xC0` … `RET NZ`
+  - `0xC8` … `RET Z`
+  - `0xD0` … `RET NC`
+  - `0xD8` … `RET C`
+- 動作:
+  - 無条件: `PC ← popWord()`
+  - 条件付き:
+    - 条件成立: `PC ← popWord()`
+    - 条件不成立: スタック操作なし
+- サイクル:
+  - 無条件: 16
+  - 条件付き:
+    - 条件成立: 20
+    - 条件不成立: 8
+
+#### 7.6.9 RST n（リスタートベクタ）
+
+RST は「固定アドレスの CALL」と考えるとわかりやすい。  
+8 個の固定アドレス（0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38）へジャンプしつつ、  
+戻りアドレスをスタックに積む。
+
+- 主な opcode:
+  - `0xC7` … `RST 00H`
+  - `0xCF` … `RST 08H`
+  - `0xD7` … `RST 10H`
+  - `0xDF` … `RST 18H`
+  - `0xE7` … `RST 20H`
+  - `0xEF` … `RST 28H`
+  - `0xF7` … `RST 30H`
+  - `0xFF` … `RST 38H`
+- 動作:
+  - `returnAddress = PC`（opcode 実行後、すでに「次の命令の先頭」を指している）
+  - `pushWord(returnAddress)`
+  - `PC ← ベクタアドレス`
+- サイクル: 16
+
+RST は主に **割り込みベクタ**や、ゲーム側の「共通サブルーチン入口」として多用される。  
+ACE 解説の際には「どの RST からどの処理に飛んでいるか」を追うことが重要になる。
+
+---
+
 ## 参考資料
 
 - [Game Boy CPU Manual](https://ia803208.us.archive.org/30/items/GameBoyProgManVer1.1/GameBoyProgManVer1.1.pdf)（英語、公式マニュアル）
