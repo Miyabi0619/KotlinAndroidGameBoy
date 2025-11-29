@@ -86,18 +86,41 @@ class GameBoyCoreImpl : GameBoyCore {
             val targetCyclesPerFrame = 70_224
             var accumulatedCycles = 0
             var instructionCount = 0
+            var lastPc = m.cpu.registers.pc
+            var pcStuckCount = 0
             while (accumulatedCycles < targetCyclesPerFrame) {
-                accumulatedCycles += m.stepInstruction()
+                val cycles = m.stepInstruction()
+                accumulatedCycles += cycles
                 instructionCount++
+
+                // PCが進んでいるか確認（無限ループ検出）
+                val currentPc = m.cpu.registers.pc
+                if (currentPc == lastPc) {
+                    pcStuckCount++
+                    if (pcStuckCount > 100) {
+                        android.util.Log.e(
+                            "GameBoyCore",
+                            "PC stuck at 0x${currentPc.toString(16)} for $pcStuckCount instructions. " +
+                                "Possible infinite loop or exception.",
+                        )
+                        break
+                    }
+                } else {
+                    pcStuckCount = 0
+                    lastPc = currentPc
+                }
             }
 
             frameIndex += 1
 
             val pixels = m.ppu.renderFrame()
             if (frameIndex % 60 == 1L) {
+                // PCの値を確認（CPUが進んでいるか）
+                val pc = m.cpu.registers.pc
                 android.util.Log.d(
                     "GameBoyCore",
-                    "Frame $frameIndex: cycles=$accumulatedCycles, instructions=$instructionCount, pixels size=${pixels.size}",
+                    "Frame $frameIndex: cycles=$accumulatedCycles, instructions=$instructionCount, " +
+                        "PC=0x${pc.toString(16)}, A=0x${m.cpu.registers.a.toString(16)}",
                 )
             }
 

@@ -17,12 +17,15 @@ class SystemBusAndTimerTest {
 
         val interruptController = InterruptController()
         val timer = Timer(interruptController)
+        val vram = UByteArray(0x2000) { 0u }
+        val ppu = Ppu(vram)
         val bus =
             SystemBus(
                 rom = rom,
                 interruptController = interruptController,
                 timer = timer,
                 joypad = Joypad(interruptController),
+                ppu = ppu,
             )
 
         // ROM 読み取り
@@ -45,12 +48,15 @@ class SystemBusAndTimerTest {
         val rom = UByteArray(ROM_SIZE) { 0x00u }
         val interruptController = InterruptController()
         val timer = Timer(interruptController)
+        val vram = UByteArray(0x2000) { 0u }
+        val ppu = Ppu(vram)
         val bus =
             SystemBus(
                 rom = rom,
                 interruptController = interruptController,
                 timer = timer,
                 joypad = Joypad(interruptController),
+                ppu = ppu,
             )
 
         // IE: すべての割り込みを許可

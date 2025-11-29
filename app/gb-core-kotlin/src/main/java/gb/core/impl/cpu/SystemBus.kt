@@ -28,6 +28,10 @@ class SystemBus(
     private val timer: Timer,
     joypad: Joypad,
     /**
+     * PPU インスタンス（I/O レジスタ読み書き用）。
+     */
+    ppu: Ppu,
+    /**
      * ROM が MBC1 カートリッジであれば Mbc1 インスタンスを渡す。
      * それ以外のカートリッジでは null（ノーマッパ）とする。
      */
@@ -37,11 +41,16 @@ class SystemBus(
     private val joypad: Joypad = joypad
 
     /**
-     * 汎用 I/O レジスタ（FF10–FF7F）のバックアップ。
-     *
-     * - PPU やサウンドなどはまだ未実装なので、とりあえず値を保持するだけ。
+     * PPU インスタンス（I/O レジスタ読み書き用）。
      */
-    private val ioRegs: UByteArray = UByteArray(0x70) { 0u }
+    private val ppu: Ppu = ppu
+
+    /**
+     * 汎用 I/O レジスタ（FF10–FF3F, FF50–FF7F）のバックアップ。
+     *
+     * - サウンドなどはまだ未実装なので、とりあえず値を保持するだけ。
+     */
+    private val ioRegs: UByteArray = UByteArray(0x60) { 0u }
 
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
@@ -81,13 +90,21 @@ class SystemBus(
             addr in 0xFE00..0xFE9F -> oam[addr - 0xFE00]
             addr in 0xFEA0..0xFEFF -> 0xFFu // 未使用領域
             addr == 0xFF00 -> joypad.read()
+            addr in 0xFF01..0xFF03 -> 0xFFu // シリアル通信（未実装）
             addr in 0xFF04..0xFF07 -> {
                 // タイマレジスタ（DIV/TIMA/TMA/TAC）
                 val offset = addr - 0xFF04
                 timer.readRegister(offset)
             }
+            addr in 0xFF08..0xFF0E -> 0xFFu // 未使用領域
             addr == 0xFF0F -> interruptController.readIf()
-            addr in 0xFF10..0xFF7F -> ioRegs[addr - 0xFF10]
+            addr in 0xFF40..0xFF4B -> {
+                // PPU I/O レジスタ（LCDC/STAT/SCY/SCX/LY/LYC/DMA/BGP/OBP0/OBP1/WY/WX）
+                val offset = addr - 0xFF40
+                ppu.readRegister(offset)
+            }
+            addr in 0xFF10..0xFF3F -> ioRegs[addr - 0xFF10] // サウンド（未実装）
+            addr in 0xFF50..0xFF7F -> ioRegs[addr - 0xFF50] // その他I/O（未実装）
             addr in 0xFF80..0xFFFE -> hram[addr - 0xFF80]
             addr == 0xFFFF -> interruptController.readIe()
             else -> 0xFFu
@@ -104,7 +121,15 @@ class SystemBus(
                 mbc1?.writeControl(addr, value)
             }
             in 0x8000..0x9FFF -> {
-                vram[addr - 0x8000] = value
+                val vramIndex = addr - 0x8000
+                vram[vramIndex] = value
+                // デバッグ: VRAMへの最初の数回の書き込みをログ出力
+                if (vramIndex < 0x100) {
+                    android.util.Log.d(
+                        "SystemBus",
+                        "VRAM write: 0x${addr.toString(16)} = 0x${value.toString(16)}",
+                    )
+                }
             }
             in 0xA000..0xBFFF -> {
                 val ram = cartridgeRam ?: return
@@ -144,8 +169,16 @@ class SystemBus(
                 )
             }
             0xFF0F -> interruptController.writeIf(value)
-            in 0xFF10..0xFF7F -> {
-                ioRegs[addr - 0xFF10] = value
+            in 0xFF40..0xFF4B -> {
+                // PPU I/O レジスタ（LCDC/STAT/SCY/SCX/LY/LYC/DMA/BGP/OBP0/OBP1/WY/WX）
+                val offset = addr - 0xFF40
+                ppu.writeRegister(offset, value)
+            }
+            in 0xFF10..0xFF3F -> {
+                ioRegs[addr - 0xFF10] = value // サウンド（未実装）
+            }
+            in 0xFF50..0xFF7F -> {
+                ioRegs[addr - 0xFF50] = value // その他I/O（未実装）
             }
             in 0xFF80..0xFFFE -> {
                 hram[addr - 0xFF80] = value

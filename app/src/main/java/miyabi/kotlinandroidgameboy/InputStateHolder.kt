@@ -40,5 +40,3 @@ object InputStateHolder {
         return true
     }
 }
-
-

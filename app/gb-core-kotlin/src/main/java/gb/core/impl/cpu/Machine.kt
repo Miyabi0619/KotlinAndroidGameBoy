@@ -59,6 +59,7 @@ class Machine(
     init {
         val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
         val vram = UByteArray(0x2000) { 0u }
+        ppu = Ppu(vram)
         bus =
             SystemBus(
                 rom = rom,
@@ -68,9 +69,9 @@ class Machine(
                 timer = timer,
                 mbc1 = mbc1,
                 joypad = joypad,
+                ppu = ppu,
             )
         cpu = Cpu(bus)
-        ppu = Ppu(vram)
 
         // Game Boy 起動時のレジスタ初期化
         // 実機では 0x0100 から実行開始（0x0000-0x00FF はブートROM領域だが、ここでは省略）

@@ -1,5 +1,7 @@
 package gb.core.impl.cpu
 
+import android.util.Log
+
 /**
  * Game Boy CPU 本体。
  *
@@ -128,10 +130,41 @@ class Cpu(
         val pcBefore = registers.pc
         val opcode = bus.readByte(pcBefore).toInt()
 
+        // デバッグ: 最初の数命令をログ出力（PCが進んでいるか確認）
+        if (pcBefore.toInt() in 0x0140..0x0200) {
+            try {
+                Log.d(
+                    "CPU",
+                    "Executing: PC=0x${pcBefore.toString(16)}, opcode=0x${opcode.toString(16)}, " +
+                        "A=0x${registers.a.toString(16)}, C=0x${registers.c.toString(16)}, " +
+                        "Z=${registers.flagZ}, C=${registers.flagC}",
+                )
+            } catch (_: RuntimeException) {
+                // テスト環境では Log がモックされていない可能性があるため、無視
+            }
+        }
+
         // 次の命令に備えて PC を 1 バイト分進める。
         registers.pc = (pcBefore.toInt() + 1).toUShort()
 
-        return executeByOpcode(opcode, pcBefore)
+        return try {
+            executeByOpcode(opcode, pcBefore)
+        } catch (e: IllegalStateException) {
+            // 未実装命令のエラーをキャッチして、より詳細な情報をログ出力
+            try {
+                Log.e(
+                    "CPU",
+                    "Exception at PC=0x${pcBefore.toString(16)}: opcode=0x${opcode.toString(16)}, " +
+                        "A=0x${registers.a.toString(16)}, B=0x${registers.b.toString(16)}, " +
+                        "C=0x${registers.c.toString(16)}, D=0x${registers.d.toString(16)}, " +
+                        "E=0x${registers.e.toString(16)}, H=0x${registers.h.toString(16)}, " +
+                        "L=0x${registers.l.toString(16)}, SP=0x${registers.sp.toString(16)}",
+                )
+            } catch (_: RuntimeException) {
+                // テスト環境では Log がモックされていない可能性があるため、無視
+            }
+            throw e
+        }
     }
 
     /**
@@ -440,7 +473,17 @@ class Cpu(
             0x6D -> executeLdRegister(::setL, registers.l) // LD L, L
             // A 行の自己コピー
             0x7F -> executeLdRegister(::setA, registers.a) // LD A, A
-            else -> error("Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}")
+            else -> {
+                try {
+                    Log.e(
+                        "CPU",
+                        "Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}",
+                    )
+                } catch (_: RuntimeException) {
+                    // テスト環境では Log がモックされていない可能性があるため、無視
+                }
+                error("Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}")
+            }
         }
 
     /**
@@ -953,7 +996,19 @@ class Cpu(
 
         return if (checkCondition(cond)) {
             // 条件成立時のみ、次の命令アドレスを基準にオフセットを適用
-            val newPc = pcAfterImmediate.toInt() + signExtend(offset)
+            val signedOffset = signExtend(offset)
+            val newPc = pcAfterImmediate.toInt() + signedOffset
+            if (pc.toInt() in 0x0140..0x0200) {
+                try {
+                    Log.d(
+                        "CPU",
+                        "JR ${cond.name} taken: PC=0x${pc.toString(16)}, offset=0x${offset.toString(16)} (signed=$signedOffset), " +
+                            "pcAfterImmediate=0x${pcAfterImmediate.toString(16)}, newPc=0x${newPc.toString(16)}",
+                    )
+                } catch (_: RuntimeException) {
+                    // テスト環境では Log がモックされていない可能性があるため、無視
+                }
+            }
             registers.pc = newPc.toUShort()
             Cycles.JR_COND_TAKEN
         } else {
@@ -1729,7 +1784,20 @@ class Cpu(
         val offset = bus.readByte(pc)
         registers.pc = (pc.toInt() + 1).toUShort()
         val address = (0xFF00 + offset.toInt()).toUShort()
-        registers.a = bus.readByte(address)
+        val value = bus.readByte(address)
+        if (pc.toInt() in 0x0140..0x0200) {
+            try {
+                Log.d(
+                    "CPU",
+                    "LDH A, (n): PC=0x${pc.toString(16)}, offset=0x${offset.toString(16)}, " +
+                        "address=0x${address.toString(16)}, value=0x${value.toString(16)}, " +
+                        "A before=0x${registers.a.toString(16)}",
+                )
+            } catch (_: RuntimeException) {
+                // テスト環境では Log がモックされていない可能性があるため、無視
+            }
+        }
+        registers.a = value
         return 12
     }
 
