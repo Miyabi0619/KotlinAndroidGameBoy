@@ -13,6 +13,7 @@ import kotlin.ExperimentalUnsignedTypes
 class Ppu(
     @Suppress("UnusedPrivateProperty")
     private val vram: UByteArray,
+    private val interruptController: InterruptController,
 ) {
     companion object {
         const val SCREEN_WIDTH = 160
@@ -23,6 +24,10 @@ class Ppu(
         private const val BG_MAP0_BASE = 0x1800 // 0x9800–0x9BFF
         private const val BG_MAP_WIDTH = 32
         private const val TILE_SIZE_BYTES = 16 // 8x8, 2bytes/line * 8
+
+        // PPU タイミング定数
+        const val CYCLES_PER_SCANLINE = 456 // 1スキャンライン = 456 CPUサイクル
+        const val TOTAL_SCANLINES = 154 // 144行の描画 + 10行のVBlank = 154行（0-153）
     }
 
     // PPU I/O レジスタ（最小限の実装）
@@ -38,6 +43,10 @@ class Ppu(
     private var obp1: UByte = 0xFFu // OBJ Palette 1 (0xFF49) - デフォルト値
     private var wy: UByte = 0x00u // Window Y (0xFF4A)
     private var wx: UByte = 0x00u // Window X (0xFF4B)
+
+    // PPU 内部状態
+    private var scanlineCycles: Int = 0 // 現在のスキャンライン内の累積サイクル数
+    private var previousLy: UByte = 0x00u // 前回のLY値（VBlank割り込み検出用）
 
     /**
      * PPU I/O レジスタの読み取り。
@@ -96,12 +105,27 @@ class Ppu(
     /**
      * CPU サイクルに応じて PPU 内部状態を進める。
      *
-     * - 現状は何もしないダミー実装。
+     * - スキャンライン（LYレジスタ）を更新する。
+     * - 1スキャンライン = 456 CPUサイクル
+     * - 144行の描画（0-143）+ 10行のVBlank（144-153）= 154行（0-153）
      */
     fun step(cycles: Int) {
-        // TODO(miyabi): LCDC/STAT, スキャンライン、モード遷移などを実装
         if (cycles <= 0) {
             return
+        }
+
+        scanlineCycles += cycles
+
+        // 456サイクルごとにスキャンラインを進める
+        while (scanlineCycles >= CYCLES_PER_SCANLINE) {
+            scanlineCycles -= CYCLES_PER_SCANLINE
+            previousLy = ly
+            ly = ((ly.toInt() + 1) % TOTAL_SCANLINES).toUByte()
+
+            // VBlank割り込み: LYが144（VBlank開始）になったときに発生
+            if (previousLy == 143u.toUByte() && ly == 144u.toUByte()) {
+                interruptController.request(InterruptController.Type.VBLANK)
+            }
         }
     }
 
@@ -130,15 +154,20 @@ class Ppu(
         }
 
         for (y in 0 until SCREEN_HEIGHT) {
-            val tileRow = y / 8
-            val rowInTile = y % 8
+            // スクロールYを考慮した背景Y座標
+            val bgY = (y + scy.toInt()) and 0xFF
+            val tileRow = bgY / 8
+            val rowInTile = bgY % 8
 
             for (x in 0 until SCREEN_WIDTH) {
-                val tileCol = x / 8
-                val colInTile = x % 8
+                // スクロールXを考慮した背景X座標
+                val bgX = (x + scx.toInt()) and 0xFF
+                val tileCol = bgX / 8
+                val colInTile = bgX % 8
 
                 // BG マップ 0 を使用（0x9800–0x9BFF）
-                val bgIndex = BG_MAP0_BASE + tileRow * BG_MAP_WIDTH + tileCol
+                // 32x32タイルマップなので、モジュロ演算でラップアラウンド
+                val bgIndex = BG_MAP0_BASE + (tileRow % 32) * BG_MAP_WIDTH + (tileCol % 32)
                 val tileIndex = vram.getOrElse(bgIndex) { 0u }.toInt() and 0xFF
 
                 // タイルデータは 0x8000 から、1 タイル 16 バイト
@@ -153,7 +182,7 @@ class Ppu(
                     (((high shr bit) and 0x1) shl 1) or
                         ((low shr bit) and 0x1)
 
-                pixels[y * SCREEN_WIDTH + x] = mapColorIdToArgb(colorId)
+                pixels[y * SCREEN_WIDTH + x] = mapColorIdToArgb(colorId, bgp)
             }
         }
 
@@ -182,11 +211,27 @@ class Ppu(
         return pixels
     }
 
-    private fun mapColorIdToArgb(colorId: Int): Int =
-        when (colorId) {
+    /**
+     * カラーIDをARGBに変換する。
+     *
+     * @param colorId カラーID (0-3)
+     * @param bgp BGパレットレジスタ (0xFF47)
+     * @return ARGB値
+     */
+    private fun mapColorIdToArgb(
+        colorId: Int,
+        bgp: UByte,
+    ): Int {
+        // BGPレジスタからカラーIDに対応するパレットエントリを取得
+        // BGPのビット構成: [color3][color2][color1][color0] (各2bit)
+        val paletteEntry = (bgp.toInt() shr (colorId * 2)) and 0x03
+
+        // Game Boyの4階調グレースケールパレット
+        return when (paletteEntry) {
             0 -> 0xFFFFFFFF.toInt() // 白
             1 -> 0xFFAAAAAA.toInt() // 薄いグレー
             2 -> 0xFF555555.toInt() // 濃いグレー
             else -> 0xFF000000.toInt() // 黒
         }
+    }
 }

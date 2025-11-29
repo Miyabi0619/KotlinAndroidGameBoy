@@ -59,7 +59,7 @@ class Machine(
     init {
         val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
         val vram = UByteArray(0x2000) { 0u }
-        ppu = Ppu(vram)
+        ppu = Ppu(vram, interruptController)
         bus =
             SystemBus(
                 rom = rom,

@@ -24,7 +24,8 @@ class PpuTest {
         val bgMapBase = 0x1800
         vram[bgMapBase] = 0x00u
 
-        val ppu = Ppu(vram)
+        val interruptController = InterruptController()
+        val ppu = Ppu(vram, interruptController)
         val frame = ppu.renderFrame()
 
         // 左上 8x8 ピクセルはすべてタイル 0（黒）になっているはず

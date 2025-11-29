@@ -229,6 +229,7 @@ class Cpu(
             0x3C -> executeInc8({ registers.a }, ::setA) // INC A
             0x34 -> executeIncAtHL() // INC (HL)
             // 8bit DEC
+            0x36 -> executeLdHLFromImmediate() // LD (HL), n
             0x05 -> executeDec8({ registers.b }, ::setB) // DEC B
             0x0D -> executeDec8({ registers.c }, ::setC) // DEC C
             0x15 -> executeDec8({ registers.d }, ::setD) // DEC D
@@ -365,10 +366,16 @@ class Cpu(
             0x03 -> executeIncBC()
             0x0B -> executeDecBC()
             0x23 -> executeIncHL()
+            0x2B -> executeDecHL()
             0x13 -> executeIncDE()
             0x1B -> executeDecDE()
             0x33 -> executeIncSP()
             0x3B -> executeDecSP()
+            // 16bit ADD HL, rr
+            0x09 -> executeAddHl(registers.bc) // ADD HL, BC
+            0x19 -> executeAddHl(registers.de) // ADD HL, DE
+            0x29 -> executeAddHl(registers.hl) // ADD HL, HL
+            0x39 -> executeAddHl(registers.sp) // ADD HL, SP
             // 間接ジャンプ / RETI
             0xE9 -> executeJpHl() // JP (HL)
             0xD9 -> executeReti() // RETI
@@ -377,8 +384,10 @@ class Cpu(
             0x08 -> executeLdMemoryFromSp() // LD (nn), SP
             0xF8 -> executeLdHlFromSpPlusImmediate() // LD HL, SP+e
             // HL 自動インクリメント付きロード／ストア
-            0x22 -> executeLdHLPlusFromA()
-            0x2A -> executeLdAFromHLPlus()
+            0x22 -> executeLdHLPlusFromA() // LD (HL+), A
+            0x2A -> executeLdAFromHLPlus() // LD A, (HL+)
+            0x32 -> executeLdHLMinusFromA() // LD (HL-), A
+            0x3A -> executeLdAFromHLMinus() // LD A, (HL-)
             // HL 経由のメモリアクセス（単発）
             0x7E -> executeLdAFromHL()
             0x77 -> executeLdHLFromA()
@@ -1626,6 +1635,19 @@ class Cpu(
         )
 
     /**
+     * DEC HL 命令: HL レジスタを 1 減少させる。
+     *
+     * - オペコード: 0x2B
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeDecHL(): Int =
+        executeDec16(
+            get = { registers.hl },
+            set = { registers.hl = it },
+        )
+
+    /**
      * DEC DE 命令: DE レジスタを 1 減少させる。
      *
      * - オペコード: 0x1B
@@ -1663,6 +1685,33 @@ class Cpu(
             get = { registers.sp },
             set = { registers.sp = it },
         )
+
+    /**
+     * ADD HL, rr 命令: HL レジスタに 16bit レジスタを加算する。
+     *
+     * - オペコード: 0x09 (BC), 0x19 (DE), 0x29 (HL), 0x39 (SP)
+     * - フラグ:
+     *   - Z: 変更なし
+     *   - N: 0
+     *   - H: 下位12ビットの加算でキャリーがあれば1
+     *   - C: 16ビット加算でキャリーがあれば1
+     * - サイクル数: 8
+     */
+    private fun executeAddHl(value: UShort): Int {
+        val hl = registers.hl.toInt()
+        val addend = value.toInt()
+        val result = hl + addend
+
+        // Hフラグ: 下位12ビットの加算でキャリーがあるか
+        val hCarry = (hl and 0x0FFF) + (addend and 0x0FFF) > 0x0FFF
+
+        registers.hl = result.toUShort()
+        registers.flagN = false
+        registers.flagH = hCarry
+        registers.flagC = result > 0xFFFF
+
+        return Cycles.INC_16 // 8サイクル
+    }
 
     /**
      * LD A, (HL) 命令: A ← [HL]。
@@ -1704,6 +1753,22 @@ class Cpu(
         val address = registers.hl
         bus.writeByte(address, registers.a)
         return Cycles.LD_HL_FROM_A
+    }
+
+    /**
+     * LD (HL), n 命令: [HL] ← 即値 n。
+     *
+     * - オペコード: 0x36
+     * - フラグ: 変化なし
+     * - サイクル数: 12
+     */
+    private fun executeLdHLFromImmediate(): Int {
+        val pc = registers.pc
+        val value = bus.readByte(pc)
+        registers.pc = (pc.toInt() + 1).toUShort()
+        val address = registers.hl
+        bus.writeByte(address, value)
+        return Cycles.INC_DEC_AT_HL // 12サイクル（メモリアクセスがあるため）
     }
 
     /**
@@ -1839,6 +1904,35 @@ class Cpu(
         bus.writeByte(address, registers.a)
         registers.hl = (address + 1u).toUShort()
         return Cycles.LD_HL_FROM_A_INC
+    }
+
+    /**
+     * LD (HL-), A 命令: [HL] ← A; HL ← HL - 1。
+     *
+     * - オペコード: 0x32
+     * - フラグ: 変化なし
+     * - サイクル数: 8
+     */
+    private fun executeLdHLMinusFromA(): Int {
+        val address = registers.hl
+        bus.writeByte(address, registers.a)
+        registers.hl = (address - 1u).toUShort()
+        return Cycles.LD_HL_FROM_A_INC
+    }
+
+    /**
+     * LD A, (HL-) 命令: A ← [HL]; HL ← HL - 1。
+     *
+     * - オペコード: 0x3A
+     * - フラグ: 変化なし
+     * - サイクル数: 8
+     */
+    private fun executeLdAFromHLMinus(): Int {
+        val address = registers.hl
+        val value = bus.readByte(address)
+        registers.a = value
+        registers.hl = (address - 1u).toUShort()
+        return Cycles.LD_A_FROM_HL_INC
     }
 
     /**
