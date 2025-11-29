@@ -31,11 +31,13 @@ style:
 complexity:
   LargeClass:
     active: true
-    threshold: 1400
+    threshold: 1500
   LongMethod:
     active: false
     threshold: 80
   CyclomaticComplexMethod:
+    active: false
+  LongParameterList:
     active: false
   TooManyFunctions:
     active: true

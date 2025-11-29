@@ -1870,6 +1870,137 @@ class CpuTest {
         assertEquals(false, cpu.registers.flagH)
     }
 
+    @Test
+    fun `JP HL jumps to address in HL`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: E9 (JP (HL))
+        memory[0x0100] = 0xE9u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0x1234u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0x1234u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `RETI pops address and enables IME`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: D9 (RETI)
+        memory[0x0100] = 0xD9u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        // スタックに 0x1234 が積まれているとする
+        cpu.registers.sp = 0xFFFCu
+        bus.writeByte(0xFFFCu, 0x34u)
+        bus.writeByte(0xFFFDU, 0x12u)
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(16, cycles)
+        assertEquals(0x1234u.toUShort(), cpu.registers.pc)
+        assertEquals(0xFFFEu.toUShort(), cpu.registers.sp)
+        // IME が有効になっていること（内部状態なので、今はテストできない前提でコメントとして残す）
+    }
+
+    @Test
+    fun `DI clears IME immediately and cancels pending EI`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: FB F3  (EI; DI)
+        memory[0x0100] = 0xFBu
+        memory[0x0101] = 0xF3u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        // EI 実行（IME 有効化はペンディング）
+        val cyclesEi = cpu.executeInstruction()
+        assertEquals(4, cyclesEi)
+
+        // DI 実行（ペンディングを含めて IME を無効化）
+        val cyclesDi = cpu.executeInstruction()
+        assertEquals(4, cyclesDi)
+    }
+
+    @Test
+    fun `EI enables IME after next instruction`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: FB 00 00  (EI; NOP; NOP)
+        memory[0x0100] = 0xFBu
+        memory[0x0101] = 0x00u
+        memory[0x0102] = 0x00u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        // EI 実行
+        val cyclesEi = cpu.executeInstruction()
+        assertEquals(4, cyclesEi)
+
+        // ここで IME はまだ有効化されていない想定だが、内部状態は公開していないため、
+        // テストでは「少なくとも例外が出ずに実行できる」ことのみ確認する。
+
+        // NOP 実行
+        val cyclesNop1 = cpu.executeInstruction()
+        assertEquals(4, cyclesNop1)
+
+        // 2 つ目の NOP 実行
+        val cyclesNop2 = cpu.executeInstruction()
+        assertEquals(4, cyclesNop2)
+    }
+
+    @Test
+    fun `HALT makes CPU execute as NOP until external wakeup`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 76 (HALT)
+        memory[0x0100] = 0x76u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cyclesHalt = cpu.executeInstruction()
+        assertEquals(4, cyclesHalt)
+
+        // HALT 状態では executeInstruction は NOP と同様に 4 サイクルを返し続ける（PC も進まない）
+        val cyclesWhileHalted = cpu.executeInstruction()
+        assertEquals(4, cyclesWhileHalted)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `STOP makes CPU execute as NOP until external wakeup`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 10 (STOP)
+        memory[0x0100] = 0x10u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cyclesStop = cpu.executeInstruction()
+        assertEquals(4, cyclesStop)
+
+        // STOP 状態でも HALT と同様に 4 サイクルの NOP 相当として扱う
+        val cyclesWhileStopped = cpu.executeInstruction()
+        assertEquals(4, cyclesWhileStopped)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

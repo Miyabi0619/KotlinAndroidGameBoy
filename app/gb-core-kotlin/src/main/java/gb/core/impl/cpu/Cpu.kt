@@ -84,9 +84,47 @@ class Cpu(
     val registers = Registers()
 
     /**
+     * 割り込みマスタ有効フラグ（IME）。
+     *
+     * - EI/DI/RETI で操作される。
+     * - 実際の割り込み受付処理は今後実装する。
+     */
+    private var interruptMasterEnabled: Boolean = false
+
+    /**
+     * EI 実行後、次の 1 命令を実行し終わったタイミングで IME を 1 にするためのペンディングフラグ。
+     *
+     * - Game Boy 仕様では EI は「直後の 1 命令だけは割り込み無効のまま」にするため、
+     *   EI 実行時点では IME を即座に 1 にせず、このフラグだけを立てる。
+     */
+    private var imeEnablePending: Boolean = false
+
+    /**
+     * HALT/STOP 状態を表すフラグ。
+     *
+     * - 現時点では「CPU が停止しているかどうか」だけを持ち、
+     *   実際のウェイクアップ条件（割り込みなど）は後続フェーズで実装する。
+     */
+    private var halted: Boolean = false
+    private var stopped: Boolean = false
+
+    /**
      * 現在の PC が指す 1 命令を実行し、その命令に要したサイクル数を返す。
      */
     fun executeInstruction(): Int {
+        // EI の効果は「次の 1 命令の実行後」に反映されるため、
+        // ここでペンディングフラグをチェックして IME を有効化する。
+        if (imeEnablePending) {
+            interruptMasterEnabled = true
+            imeEnablePending = false
+        }
+
+        // HALT / STOP 状態では CPU は基本的に何もしない。
+        // （実際の実機では割り込みなどで解除されるが、ここでは単純に 4 サイクル消費の NOP として扱う）
+        if (halted || stopped) {
+            return Cycles.NOP
+        }
+
         val pcBefore = registers.pc
         val opcode = bus.readByte(pcBefore).toInt()
 
@@ -266,6 +304,9 @@ class Cpu(
             0x1B -> executeDecDE()
             0x33 -> executeIncSP()
             0x3B -> executeDecSP()
+            // 間接ジャンプ / RETI
+            0xE9 -> executeJpHl() // JP (HL)
+            0xD9 -> executeReti() // RETI
             // 16bit LD（SP とメモリ）
             0xF9 -> executeLdSpFromHl() // LD SP, HL
             0x08 -> executeLdMemoryFromSp() // LD (nn), SP
@@ -289,6 +330,11 @@ class Cpu(
             0xF0 -> executeLdhAToImmediateOffset() // LDH A, (n)
             0xE2 -> executeLdhFromAWithCOffset() // LD (C), A
             0xF2 -> executeLdhAToCOffset() // LD A, (C)
+            // 割り込み制御 / CPU 制御
+            0xF3 -> executeDi() // DI
+            0xFB -> executeEi() // EI
+            0x76 -> executeHalt() // HALT
+            0x10 -> executeStop() // STOP
             // レジスタ <-> (HL)
             0x46 -> executeLdRegisterFromHL(::setB) // LD B, (HL)
             0x4E -> executeLdRegisterFromHL(::setC) // LD C, (HL)
@@ -1360,6 +1406,84 @@ class Cpu(
         registers.flagN = false
         registers.flagH = false
         return Cycles.FLAG_MISC
+    }
+
+    /**
+     * JP (HL) 命令。
+     *
+     * - オペコード: 0xE9
+     * - 動作: PC ← HL
+     * - サイクル数: 4
+     */
+    private fun executeJpHl(): Int {
+        registers.pc = registers.hl
+        return Cycles.NOP
+    }
+
+    /**
+     * RETI 命令: RET と同時に IME を 1 にする。
+     *
+     * - オペコード: 0xD9
+     * - 動作:
+     *   - PC ← popWord()
+     *   - IME ← 1
+     * - サイクル数: 16
+     */
+    private fun executeReti(): Int {
+        registers.pc = popWord()
+        interruptMasterEnabled = true
+        return Cycles.RET
+    }
+
+    /**
+     * DI 命令: 即座に IME を 0 にし、EI ペンディングもクリアする。
+     *
+     * - オペコード: 0xF3
+     * - サイクル数: 4
+     */
+    private fun executeDi(): Int {
+        interruptMasterEnabled = false
+        imeEnablePending = false
+        return Cycles.FLAG_MISC
+    }
+
+    /**
+     * EI 命令: 「次の 1 命令実行後」に IME を 1 にする。
+     *
+     * - オペコード: 0xFB
+     * - サイクル数: 4
+     */
+    private fun executeEi(): Int {
+        imeEnablePending = true
+        return Cycles.FLAG_MISC
+    }
+
+    /**
+     * HALT 命令: CPU を HALT 状態にする。
+     *
+     * - オペコード: 0x76
+     * - サイクル数: 4
+     *
+     * 現時点では「HALT 中は executeInstruction が NOP 相当の 4 サイクルを返す」だけ実装し、
+     * 実際のウェイクアップ（割り込みなど）は後続フェーズで扱う。
+     */
+    private fun executeHalt(): Int {
+        halted = true
+        return Cycles.NOP
+    }
+
+    /**
+     * STOP 命令: CPU を STOP 状態にする。
+     *
+     * - オペコード: 0x10
+     * - サイクル数: 4
+     *
+     * 現時点では HALT と同様に「何もしない 4 サイクル」の無限ループとして扱い、
+     * 実機どおりの挙動（CGB のスピード切り替えなど）は簡略化している。
+     */
+    private fun executeStop(): Int {
+        stopped = true
+        return Cycles.NOP
     }
 
     /**
