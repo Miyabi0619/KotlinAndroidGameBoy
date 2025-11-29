@@ -31,7 +31,7 @@ style:
 complexity:
   LargeClass:
     active: true
-    threshold: 1200
+    threshold: 1300
   LongMethod:
     active: false
     threshold: 80

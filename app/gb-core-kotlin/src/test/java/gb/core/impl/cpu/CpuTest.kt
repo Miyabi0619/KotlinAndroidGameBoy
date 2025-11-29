@@ -1581,6 +1581,118 @@ class CpuTest {
         assertEquals(0x99u.toUByte(), cpu.registers.a)
     }
 
+    @Test
+    fun `CB RLC B rotates left and updates flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: CB 00  (RLC B)
+        memory[0x0100] = 0xCBu
+        memory[0x0101] = 0x00u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.b = 0b1000_0001u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        // 1000_0001 -> 0000_0011, C=1
+        assertEquals(0b0000_0011u.toUByte(), cpu.registers.b)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `CB SRL HL shifts right logical via memory`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: CB 3E  (SRL (HL))
+        memory[0x0100] = 0xCBu
+        memory[0x0101] = 0x3Eu
+        memory[0x1234] = 0b0000_0011u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0x1234u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(16, cycles)
+        // 0000_0011 -> 0000_0001, C=1
+        assertEquals(0b0000_0001u.toUByte(), bus.readByte(0x1234u))
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `CB BIT RES SET work for registers and memory`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: CB 40  CB 80  CB C0  (BIT 0,B; RES 0,B; SET 0,B)
+        memory[0x0100] = 0xCBu
+        memory[0x0101] = 0x40u // BIT 0, B
+        memory[0x0102] = 0xCBu
+        memory[0x0103] = 0x80u // RES 0, B
+        memory[0x0104] = 0xCBu
+        memory[0x0105] = 0xC0u // SET 0, B
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.b = 0b0000_0001u
+
+        // BIT 0,B -> Z=0
+        var cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+
+        // RES 0,B -> B の bit0 を 0 に
+        cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(0b0000_0000u.toUByte(), cpu.registers.b)
+
+        // SET 0,B -> B の bit0 を 1 に
+        cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(0b0000_0001u.toUByte(), cpu.registers.b)
+
+        // (HL) 版も簡単に確認: BIT/RES/SET 1,(HL)
+        // 0x0200: CB 4E  CB 8E  CB CE
+        memory[0x0200] = 0xCBu
+        memory[0x0201] = 0x4Eu // BIT 1,(HL)
+        memory[0x0202] = 0xCBu
+        memory[0x0203] = 0x8Eu // RES 1,(HL)
+        memory[0x0204] = 0xCBu
+        memory[0x0205] = 0xCEu // SET 1,(HL)
+        memory[0x3000] = 0b0000_0010u
+
+        cpu.registers.pc = 0x0200u.toUShort()
+        cpu.registers.hl = 0x3000u
+
+        // BIT 1,(HL) -> Z=0, 12 cycles
+        cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        assertEquals(false, cpu.registers.flagZ)
+
+        // RES 1,(HL) -> 0000_0000
+        cycles = cpu.executeInstruction()
+        assertEquals(16, cycles)
+        assertEquals(0b0000_0000u.toUByte(), bus.readByte(0x3000u))
+
+        // SET 1,(HL) -> 0000_0010
+        cycles = cpu.executeInstruction()
+        assertEquals(16, cycles)
+        assertEquals(0b0000_0010u.toUByte(), bus.readByte(0x3000u))
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

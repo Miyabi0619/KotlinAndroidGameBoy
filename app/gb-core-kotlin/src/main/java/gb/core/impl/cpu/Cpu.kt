@@ -72,6 +72,11 @@ class Cpu(
         const val LD_HL_FROM_R: Int = 8
         const val INC_DEC_AT_HL: Int = 12
         const val BIT_R: Int = 8
+        const val BIT_AT_HL: Int = 12
+        const val CB_ROT_SHIFT_R: Int = 8
+        const val CB_ROT_SHIFT_AT_HL: Int = 16
+        const val CB_RES_SET_R: Int = 8
+        const val CB_RES_SET_AT_HL: Int = 16
     }
 
     val registers = Registers()
@@ -366,13 +371,27 @@ class Cpu(
     /**
      * CB xx 命令群のデコード。
      *
-     * 現時点では BIT 命令のごく一部（BIT 4, A）のみを実装。
+     * - 上位 2bit（cbOpcode[7:6]）でグループを判定:
+     *   - 00: ローテート／シフト系（RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL）
+     *   - 01: BIT b, r
+     *   - 10: RES b, r
+     *   - 11: SET b, r
+     * - 中位 3bit（cbOpcode[5:3]）はビット番号（BIT/RES/SET）またはローテート種別
+     * - 下位 3bit（cbOpcode[2:0]）は対象レジスタ（B,C,D,E,H,L,(HL),A）
      */
-    private fun executeCbByOpcode(cbOpcode: Int): Int =
-        when (cbOpcode) {
-            0x67 -> executeBitOnRegister(bit = 4, value = registers.a) // BIT 4, A
-            else -> error("Unknown CB opcode: 0x${cbOpcode.toString(16)} at PC=0x${registers.pc.toString(16)}")
+    private fun executeCbByOpcode(cbOpcode: Int): Int {
+        val group = (cbOpcode and 0b1100_0000) ushr 6
+        val y = (cbOpcode and 0b0011_1000) ushr 3
+        val z = cbOpcode and 0b0000_0111
+
+        return when (group) {
+            0 -> executeCbRotateShift(y, z)
+            1 -> executeCbBit(y, z)
+            2 -> executeCbRes(y, z)
+            3 -> executeCbSet(y, z)
+            else -> error("Invalid CB group for opcode 0x${cbOpcode.toString(16)}")
         }
+    }
 
     /**
      * NOP 命令: 何もしないで 4 サイクル消費する。
@@ -991,22 +1010,233 @@ class Cpu(
     }
 
     /**
-     * BIT b, r 命令（レジスタ版）の共通処理。
+     * CB グループ 00: ローテート／シフト系の実装（RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL）。
      *
-     * - 指定ビットが 0 なら Z=1、1 なら Z=0
-     * - N=0, H=1, C は変更しない
-     * - サイクル数: 8
+     * - y: 演算種別（0〜7）
+     * - z: 対象レジスタインデックス（0=B,1=C,2=D,3=E,4=H,5=L,6=(HL),7=A）
      */
-    private fun executeBitOnRegister(
-        bit: Int,
-        value: UByte,
+    private fun executeCbRotateShift(
+        y: Int,
+        z: Int,
     ): Int {
+        val isAtHl = z == 6
+        val value =
+            if (isAtHl) {
+                bus.readByte(registers.hl)
+            } else {
+                getRegisterByIndex(z)
+            }
+
+        val result = applyRotateShift(y, value)
+
+        if (isAtHl) {
+            bus.writeByte(registers.hl, result)
+            return Cycles.CB_ROT_SHIFT_AT_HL
+        }
+
+        setRegisterByIndex(
+            index = z,
+            value = result,
+        )
+        return Cycles.CB_ROT_SHIFT_R
+    }
+
+    /**
+     * CB グループ 01: BIT b, r / BIT b, (HL)。
+     */
+    private fun executeCbBit(
+        bit: Int,
+        z: Int,
+    ): Int {
+        val isAtHl = z == 6
+        val value =
+            if (isAtHl) {
+                bus.readByte(registers.hl)
+            } else {
+                getRegisterByIndex(z)
+            }
+
         val mask = (1 shl bit).toUByte()
         registers.flagZ = (value and mask) == 0u.toUByte()
         registers.flagN = false
         registers.flagH = true
-        // flagC は変更しない
-        return Cycles.BIT_R
+
+        return if (isAtHl) {
+            Cycles.BIT_AT_HL
+        } else {
+            Cycles.BIT_R
+        }
+    }
+
+    /**
+     * CB グループ 10: RES b, r / RES b, (HL)。
+     */
+    private fun executeCbRes(
+        bit: Int,
+        z: Int,
+    ): Int {
+        val isAtHl = z == 6
+        val mask = (1 shl bit).inv().toUByte()
+
+        if (isAtHl) {
+            val value = bus.readByte(registers.hl)
+            val result = value and mask
+            bus.writeByte(registers.hl, result)
+            return Cycles.CB_RES_SET_AT_HL
+        }
+
+        val value = getRegisterByIndex(z)
+        val result = value and mask
+        setRegisterByIndex(
+            index = z,
+            value = result,
+        )
+        return Cycles.CB_RES_SET_R
+    }
+
+    /**
+     * CB グループ 11: SET b, r / SET b, (HL)。
+     */
+    private fun executeCbSet(
+        bit: Int,
+        z: Int,
+    ): Int {
+        val isAtHl = z == 6
+        val mask = (1 shl bit).toUByte()
+
+        if (isAtHl) {
+            val value = bus.readByte(registers.hl)
+            val result = value or mask
+            bus.writeByte(registers.hl, result)
+            return Cycles.CB_RES_SET_AT_HL
+        }
+
+        val value = getRegisterByIndex(z)
+        val result = value or mask
+        setRegisterByIndex(
+            index = z,
+            value = result,
+        )
+        return Cycles.CB_RES_SET_R
+    }
+
+    /**
+     * ローテート／シフト 1 ステップを実行し、フラグを更新する。
+     *
+     * - y:
+     *   - 0: RLC
+     *   - 1: RRC
+     *   - 2: RL
+     *   - 3: RR
+     *   - 4: SLA
+     *   - 5: SRA
+     *   - 6: SWAP
+     *   - 7: SRL
+     */
+    private fun applyRotateShift(
+        y: Int,
+        value: UByte,
+    ): UByte {
+        val v = value.toInt()
+        val result: Int
+        val carry: Boolean
+
+        when (y) {
+            0 -> {
+                // RLC: 左ローテート、bit7 -> C と bit0
+                carry = (v and 0x80) != 0
+                result = ((v shl 1) and 0xFF) or if (carry) 0x01 else 0x00
+            }
+            1 -> {
+                // RRC: 右ローテート、bit0 -> C と bit7
+                carry = (v and 0x01) != 0
+                result = (v ushr 1) or if (carry) 0x80 else 0x00
+            }
+            2 -> {
+                // RL: C を巻き込みつつ左ローテート
+                val oldCarry = if (registers.flagC) 1 else 0
+                carry = (v and 0x80) != 0
+                result = ((v shl 1) and 0xFF) or oldCarry
+            }
+            3 -> {
+                // RR: C を巻き込みつつ右ローテート
+                val oldCarry = if (registers.flagC) 1 else 0
+                carry = (v and 0x01) != 0
+                result = (v ushr 1) or (oldCarry shl 7)
+            }
+            4 -> {
+                // SLA: 算術左シフト（下位ビットは 0）
+                carry = (v and 0x80) != 0
+                result = (v shl 1) and 0xFF
+            }
+            5 -> {
+                // SRA: 算術右シフト（bit7 を保持）
+                carry = (v and 0x01) != 0
+                val msb = v and 0x80
+                result = (v ushr 1) or msb
+            }
+            6 -> {
+                // SWAP: 上位 4bit と下位 4bit を入れ替え
+                carry = false
+                val high = (v and 0xF0) ushr 4
+                val low = (v and 0x0F) shl 4
+                result = (high or low) and 0xFF
+            }
+            7 -> {
+                // SRL: 論理右シフト（bit7 には 0 を入れる）
+                carry = (v and 0x01) != 0
+                result = (v ushr 1) and 0x7F
+            }
+            else -> error("Unsupported CB rotate/shift y=$y")
+        }
+
+        val resByte = result.toUByte()
+        registers.flagZ = resByte == 0u.toUByte()
+        registers.flagN = false
+        registers.flagH = false
+        registers.flagC = carry
+
+        return resByte
+    }
+
+    /**
+     * CB 命令用のレジスタインデックス → 値 の取得。
+     *
+     * - 0: B, 1: C, 2: D, 3: E, 4: H, 5: L, 7: A
+     * - 6 は (HL) なのでここでは扱わない（呼び出し側でメモリアクセスする）。
+     */
+    private fun getRegisterByIndex(index: Int): UByte =
+        when (index) {
+            0 -> registers.b
+            1 -> registers.c
+            2 -> registers.d
+            3 -> registers.e
+            4 -> registers.h
+            5 -> registers.l
+            7 -> registers.a
+            else -> error("Invalid CB register index (including (HL)): $index")
+        }
+
+    /**
+     * CB 命令用のレジスタインデックス → 値の書き込み。
+     *
+     * - 0: B, 1: C, 2: D, 3: E, 4: H, 5: L, 7: A
+     * - 6 は (HL) なのでここでは扱わない（呼び出し側でメモリアクセスする）。
+     */
+    private fun setRegisterByIndex(
+        index: Int,
+        value: UByte,
+    ) {
+        when (index) {
+            0 -> registers.b = value
+            1 -> registers.c = value
+            2 -> registers.d = value
+            3 -> registers.e = value
+            4 -> registers.h = value
+            5 -> registers.l = value
+            7 -> registers.a = value
+            else -> error("Invalid CB register index (including (HL)): $index")
+        }
     }
 
     /**
