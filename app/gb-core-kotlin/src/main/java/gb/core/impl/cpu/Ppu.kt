@@ -117,6 +117,7 @@ class Ppu(
         scanlineCycles += cycles
 
         // 456サイクルごとにスキャンラインを進める
+        val lyBefore = ly
         while (scanlineCycles >= CYCLES_PER_SCANLINE) {
             scanlineCycles -= CYCLES_PER_SCANLINE
             previousLy = ly
@@ -126,6 +127,14 @@ class Ppu(
             if (previousLy == 143u.toUByte() && ly == 144u.toUByte()) {
                 interruptController.request(InterruptController.Type.VBLANK)
             }
+        }
+
+        // デバッグ: LYレジスタが更新された場合のみログ出力（頻繁すぎるのを避ける）
+        if (ly != lyBefore) {
+            android.util.Log.d(
+                "PPU",
+                "LY updated: $lyBefore -> ${ly}, scanlineCycles=$scanlineCycles, cycles=$cycles",
+            )
         }
     }
 

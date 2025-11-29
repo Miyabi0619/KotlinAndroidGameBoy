@@ -130,14 +130,14 @@ class Cpu(
         val pcBefore = registers.pc
         val opcode = bus.readByte(pcBefore).toInt()
 
-        // デバッグ: 最初の数命令をログ出力（PCが進んでいるか確認）
-        if (pcBefore.toInt() in 0x0140..0x0200) {
+        // デバッグ: 特定のアドレス範囲でログ出力（無限ループ検出用）
+        if (pcBefore.toInt() in 0x0b30..0x0b40) {
             try {
                 Log.d(
                     "CPU",
                     "Executing: PC=0x${pcBefore.toString(16)}, opcode=0x${opcode.toString(16)}, " +
                         "A=0x${registers.a.toString(16)}, C=0x${registers.c.toString(16)}, " +
-                        "Z=${registers.flagZ}, C=${registers.flagC}",
+                        "Z=${registers.flagZ}, C=${registers.flagC}, halted=$halted, IME=$interruptMasterEnabled",
                 )
             } catch (_: RuntimeException) {
                 // テスト環境では Log がモックされていない可能性があるため、無視
@@ -173,6 +173,18 @@ class Cpu(
      * - Machine や将来の「本体」クラスが割り込み受付可否を判断するために使用する。
      */
     fun isInterruptsEnabled(): Boolean = interruptMasterEnabled
+
+    /**
+     * 現在HALT状態かどうかを返す。
+     */
+    fun isHalted(): Boolean = halted
+
+    /**
+     * HALT状態を解除する（割り込み発生時などに使用）。
+     */
+    fun wakeFromHalt() {
+        halted = false
+    }
 
     /**
      * 割り込みサービスルーチンを開始する。

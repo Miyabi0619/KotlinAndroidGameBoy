@@ -22,6 +22,16 @@ class Machine(
     val ppu: Ppu
 
     /**
+     * デバッグ用: IFレジスタを読み取る
+     */
+    fun readIf(): UByte = interruptController.readIf()
+
+    /**
+     * デバッグ用: IEレジスタを読み取る
+     */
+    fun readIe(): UByte = interruptController.readIe()
+
+    /**
      * 1 命令を実行し、その間に消費した総サイクル数（割り込みサービスを含む）を返す。
      *
      * - 流れ:
@@ -52,8 +62,36 @@ class Machine(
     }
 
     private fun handleInterrupts(): Int {
-        val pending = interruptController.nextPending(cpu.isInterruptsEnabled()) ?: return 0
-        return cpu.serviceInterrupt(pending)
+        val ifReg = interruptController.readIf()
+        val ieReg = interruptController.readIe()
+
+        if (ifReg == 0u.toUByte()) {
+            return 0
+        }
+
+        // IMEが有効な場合、割り込みを処理
+        if (cpu.isInterruptsEnabled()) {
+            val pending = interruptController.nextPending(true)
+            if (pending != null) {
+                return cpu.serviceInterrupt(pending)
+            }
+            // IMEが有効でも、IEレジスタで許可されていない場合は割り込みを処理しない
+            // しかし、HALT状態の場合は解除する必要がある
+        }
+
+        // HALT状態の場合、IFレジスタにフラグが立っていればHALT状態を解除
+        // （IMEが無効でも、またはIEレジスタが無効でも、HALT状態は解除される）
+        // 実機では、HALT状態でIMEが無効の場合、HALTバグが発生するが、ここでは簡略化
+        if (cpu.isHalted() && ifReg != 0u.toUByte()) {
+            // デバッグ: HALT状態解除時のログ
+            android.util.Log.d(
+                "Machine",
+                "Waking from HALT: IF=0x${ifReg.toString(16)}, IE=0x${ieReg.toString(16)}, IME=${cpu.isInterruptsEnabled()}",
+            )
+            cpu.wakeFromHalt()
+        }
+
+        return 0
     }
 
     init {

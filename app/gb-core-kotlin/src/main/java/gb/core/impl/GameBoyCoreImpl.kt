@@ -97,11 +97,33 @@ class GameBoyCoreImpl : GameBoyCore {
                 val currentPc = m.cpu.registers.pc
                 if (currentPc == lastPc) {
                     pcStuckCount++
-                    if (pcStuckCount > 100) {
+                    if (pcStuckCount == 101) {
+                        // 最初の検出時に詳細な状態をログ出力
+                        // IF/IEレジスタの状態も確認
+                        val ifReg = m.readIf().toString(16)
+                        val ieReg = m.readIe().toString(16)
                         android.util.Log.e(
                             "GameBoyCore",
                             "PC stuck at 0x${currentPc.toString(16)} for $pcStuckCount instructions. " +
-                                "Possible infinite loop or exception.",
+                                "A=0x${m.cpu.registers.a.toString(16)}, " +
+                                "B=0x${m.cpu.registers.b.toString(16)}, " +
+                                "C=0x${m.cpu.registers.c.toString(16)}, " +
+                                "D=0x${m.cpu.registers.d.toString(16)}, " +
+                                "E=0x${m.cpu.registers.e.toString(16)}, " +
+                                "H=0x${m.cpu.registers.h.toString(16)}, " +
+                                "L=0x${m.cpu.registers.l.toString(16)}, " +
+                                "SP=0x${m.cpu.registers.sp.toString(16)}, " +
+                                "Z=${m.cpu.registers.flagZ}, C=${m.cpu.registers.flagC}, " +
+                                "halted=${m.cpu.isHalted()}, IME=${m.cpu.isInterruptsEnabled()}, " +
+                                "IF=0x$ifReg, IE=0x$ieReg",
+                        )
+                    }
+                    // HALT状態の場合は、割り込み待ちの可能性があるため、ループを続行
+                    // ただし、HALT状態でない場合は無限ループの可能性があるため、警告のみ
+                    if (pcStuckCount > 1000 && !m.cpu.isHalted()) {
+                        android.util.Log.e(
+                            "GameBoyCore",
+                            "Breaking infinite loop: PC stuck for $pcStuckCount instructions (not HALT)",
                         )
                         break
                     }
