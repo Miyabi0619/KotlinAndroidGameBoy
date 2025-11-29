@@ -1693,6 +1693,183 @@ class CpuTest {
         assertEquals(0b0000_0010u.toUByte(), bus.readByte(0x3000u))
     }
 
+    @Test
+    fun `RLCA rotates A left and clears ZNH while setting C`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 07 (RLCA)
+        memory[0x0100] = 0x07u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0b1000_0001u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        // 1000_0001 -> 0000_0011, C=1
+        assertEquals(0b0000_0011u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `RRCA rotates A right and clears ZNH while setting C`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0F (RRCA)
+        memory[0x0100] = 0x0Fu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0b0000_0001u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        // 0000_0001 -> 1000_0000, C=1
+        assertEquals(0b1000_0000u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `RLA rotates A left through carry and clears ZNH`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 17 (RLA)
+        memory[0x0100] = 0x17u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0b1000_0000u
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        // A=1000_0000, C=1 -> 0000_0001, C=1
+        assertEquals(0b0000_0001u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `RRA rotates A right through carry and clears ZNH`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 1F (RRA)
+        memory[0x0100] = 0x1Fu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0b0000_0001u
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        // A=0000_0001, C=1 -> 1000_0000, C=1
+        assertEquals(0b1000_0000u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `CPL inverts A and sets N and H`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 2F (CPL)
+        memory[0x0100] = 0x2Fu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x0Fu
+        cpu.registers.flagZ = true
+        cpu.registers.flagC = true
+        cpu.registers.flagN = false
+        cpu.registers.flagH = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0xF0u.toUByte(), cpu.registers.a)
+        // Z/C は変化しない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagC)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+    }
+
+    @Test
+    fun `SCF sets carry and clears N and H but keeps Z`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 37 (SCF)
+        memory[0x0100] = 0x37u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = true
+        cpu.registers.flagC = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagC)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+    }
+
+    @Test
+    fun `CCF flips carry and clears N and H but keeps Z`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 3F (CCF)
+        memory[0x0100] = 0x3Fu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = false
+        cpu.registers.flagC = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagC)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

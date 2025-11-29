@@ -422,88 +422,117 @@ class Cpu(
 という共通ルールに従うため、既存のヘルパー（`executeLdRegister` / `executeLdRegisterFromHL` / `executeLdHLFromRegister`）を再利用しつつ、  
 `executeByOpcode` に opcode と対応するターゲット／ソースレジスタの組み合わせを順に追加していく方針で実装していく。
 
-### 7.5 CB プレフィックス命令と BIT 4, A（2025-11-29）
+### 7.5 CB プレフィックス命令（ローテート／シフト／BIT/RES/SET）（2025-11-29）
 
-なかよしバッヂ周りの解析に必要になるため、CB プレフィックス (`0xCB`) と、その中のごく一部だけを先行実装した。
+CB プレフィックス (`0xCB`) に続く 1 バイトを「拡張オペコード」として扱う命令群を、  
+**RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL と BIT/RES/SET（r, (HL)）まで一括で実装した。**
 
-- **CB プレフィックスの扱い**
-  - メインの `executeInstruction()` で `0xCB` を検出したら、次の 1 バイトを「拡張オペコード」として読み取り、専用のディスパッチに渡す。
-  - 実装イメージ:
+#### 7.5.1 CB プレフィックスの扱い
 
-```35:62:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Cpu.kt
-    private object Cycles {
-        const val NOP: Int = 4
-        const val LD_A_N: Int = 8
-        const val LD_R_N: Int = 8
-        const val INC_A: Int = 4
-        const val INC_16: Int = 8
-        const val DEC_16: Int = 8
-        const val LD_R_R: Int = 4
-        const val LD_A_FROM_HL: Int = 8
-        const val LD_HL_FROM_A: Int = 8
-        const val LD_A_FROM_HL_INC: Int = 8
-        const val LD_HL_FROM_A_INC: Int = 8
-        const val LD_R_FROM_HL: Int = 8
-        const val LD_HL_FROM_R: Int = 8
-        const val BIT_R: Int = 8
-    }
+- メインの `executeInstruction()` で `0xCB` を検出したら `executeCbPrefixed()` を呼び出す。
+- `executeCbPrefixed()` は
+  - `cbOpcode = [PC]` を読み、
+  - `PC ← PC+1`（拡張 opcode を読み飛ばす）、
+  - `executeCbByOpcode(cbOpcode)` にディスパッチする。
 
-    private fun executeByOpcode(
-        opcode: Int,
-        pcBefore: UShort,
-    ): Int =
-        when (opcode) {
-            0x00 -> executeNop()
-            0xCB -> executeCbPrefixed()
-            ...
-        }
+CB opcode はビット単位で分解して解釈している:
 
-    private fun executeCbPrefixed(): Int {
-        val pc = registers.pc
-        val cbOpcode = bus.readByte(pc).toInt()
-        // 拡張オペコード 1 バイト分 PC を進める
-        registers.pc = (pc.toInt() + 1).toUShort()
-        return executeCbByOpcode(cbOpcode)
-    }
-```
+- `group = cbOpcode[7:6]` … 上位 2bit でグループを判定
+  - `00` … ローテート／シフト（RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL）
+  - `01` … `BIT b, r / BIT b, (HL)`
+  - `10` … `RES b, r / RES b, (HL)`
+  - `11` … `SET b, r / SET b, (HL)`
+- `y = cbOpcode[5:3]` … ビット番号（BIT/RES/SET）またはローテート種別
+- `z = cbOpcode[2:0]` … 対象レジスタ
+  - `0=B, 1=C, 2=D, 3=E, 4=H, 5=L, 6=(HL), 7=A`
 
-- **実装済みの CB 命令**
-  - 現時点では **`BIT 4, A`（CB 67）** のみ実装:
+この 3 つの値を使って、`executeCbRotateShift(y,z)` / `executeCbBit(y,z)` / `executeCbRes(y,z)` / `executeCbSet(y,z)` に分岐する。
 
-```156:182:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Cpu.kt
-    private fun executeCbByOpcode(cbOpcode: Int): Int =
-        when (cbOpcode) {
-            0x67 -> executeBitOnRegister(bit = 4, value = registers.a) // BIT 4, A
-            else -> error("Unknown CB opcode: 0x${cbOpcode.toString(16)} at PC=0x${registers.pc.toString(16)}")
-        }
+#### 7.5.2 ローテート／シフト（RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL）
 
-    private fun executeBitOnRegister(
-        bit: Int,
-        value: UByte,
-    ): Int {
-        val mask = (1 shl bit).toUByte()
-        registers.flagZ = (value and mask) == 0u.toUByte()
-        registers.flagN = false
-        registers.flagH = true
-        // flagC は変更しない
-        return Cycles.BIT_R
-    }
-```
+ローテート／シフトは `group=0`（上位 2bit=00）の CB 命令に対応し、  
+`y` の値で演算種別を切り替える。
 
-- **BIT 4, A の仕様**
-  - 対象: A レジスタの **bit 4**（0 から数えて 4 番目、値 `0x10` のビット）を検査する。
-  - フラグ挙動（Game Boy 仕様）:
+- 対応表:
+  - `y=0` … `RLC r` / `RLC (HL)`（左ローテート、bit7 → C と bit0）
+  - `y=1` … `RRC r` / `RRC (HL)`（右ローテート、bit0 → C と bit7）
+  - `y=2` … `RL r` / `RL (HL)`（C を巻き込みつつ左ローテート）
+  - `y=3` … `RR r` / `RR (HL)`（C を巻き込みつつ右ローテート）
+  - `y=4` … `SLA r` / `SLA (HL)`（算術左シフト、下位ビットは 0）
+  - `y=5` … `SRA r` / `SRA (HL)`（算術右シフト、bit7 を保持）
+  - `y=6` … `SWAP r` / `SWAP (HL)`（上位4bitと下位4bitを入れ替え）
+  - `y=7` … `SRL r` / `SRL (HL)`（論理右シフト、bit7 に 0）
+
+フラグ挙動（共通）:
+
+- `Z`: 結果が 0 のとき 1
+- `N`: 0
+- `H`: 0
+- `C`: シフト／ローテートでこぼれたビット（左シフトなら元の bit7、右シフトなら元の bit0）
+
+サイクル数:
+
+- 対象がレジスタ `r`（B,C,D,E,H,L,A）の場合: 8 サイクル
+- 対象が `(HL)` の場合: 16 サイクル（メモリアクセスを伴うため）
+
+#### 7.5.3 BIT b, r / BIT b, (HL)
+
+`group=1`（上位 2bit=01）の CB 命令は、指定ビットのテストを行う `BIT b, r/(HL)` である。
+
+- 対象:
+  - `b = y`（0〜7）
+  - `r/(HL)` は `z` から決まる（0=B,...,6=(HL),7=A）
+- 動作:
+  - `mask = 1 << b`
+  - `value` の該当ビットをチェックし、フラグを更新:
     - `Z`: 対象ビットが 0 なら 1、1 なら 0
     - `N`: 0
     - `H`: 1
     - `C`: 変更なし
-  - レジスタ A 自体の値は一切変えない。
-  - サイクル数:
-    - `BIT b, r`（レジスタ版）は 8 サイクル
-    - `BIT b, (HL)`（メモリアクセス版）は 12 サイクル（現時点では未実装）
+  - レジスタやメモリの値自体は不変。
+- サイクル数:
+  - `BIT b, r`（レジスタ）: 8
+  - `BIT b, (HL)`: 12
 
-この BIT 4, A は、なかよしバッヂ周辺のコードで「フラグチェックや条件分岐の前段としてよく使われる」ため、  
-ACE を追ううえで必要になりそうなところから先に実装している。今後、必要に応じて他の CB xx（シフト／ローテート／他ビット検査）も追加していく。
+#### 7.5.4 RES b, r / RES b, (HL)
+
+`group=2`（上位 2bit=10）は、ビットクリア命令 `RES b, r/(HL)` に対応する。
+
+- 動作:
+  - `mask = ~(1 << b)`
+  - `result = value & mask`
+  - レジスタ／メモリへ `result` を書き戻す。
+- フラグ:
+  - 仕様上、**変更しない**（フラグはそのまま）。
+- サイクル数:
+  - レジスタ: 8
+  - `(HL)`: 16
+
+#### 7.5.5 SET b, r / SET b, (HL)
+
+`group=3`（上位 2bit=11）は、ビットセット命令 `SET b, r/(HL)` に対応する。
+
+- 動作:
+  - `mask = 1 << b`
+  - `result = value | mask`
+  - レジスタ／メモリへ `result` を書き戻す。
+- フラグ:
+  - こちらも **変更しない**。
+- サイクル数:
+  - レジスタ: 8
+  - `(HL)`: 16
+
+#### 7.5.6 実装状況（CB 系の進捗）
+
+- 実装済み:
+  - CB プレフィックスデコード (`executeCbPrefixed` / `executeCbByOpcode`)
+  - シフト／ローテート全種（RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL） for `r` と `(HL)`
+  - `BIT b, r` / `BIT b, (HL)`（b=0〜7, r=B,C,D,E,H,L,A,HL）
+  - `RES b, r` / `RES b, (HL)`
+  - `SET b, r` / `SET b, (HL)`
+- 今後必要に応じて追加・確認するもの:
+  - ACE で特に多用される CB 命令については、テストケースを個別に増やしておく（今は代表パターンでカバー）。
+  - 必要なら、CB 系全体を表に起こした簡易リファレンスを別ドキュメントに整理する。
 
 ---
 
@@ -788,6 +817,81 @@ Game Boy では I/O レジスタや HRAM が 0xFF00〜0xFFFF に配置されて�
 
 これらは Joypad 入力、LCD コントローラ、タイマ、割り込みフラグなど、  
 **ポケモン側が頻繁に触る I/O レジスタ**へのアクセスに直結するため、ACE の挙動を読む際にも重要になる。
+
+---
+
+### 7.8 A 専用ローテート／フラグ操作（RLCA/RRCA/RLA/RRA/CPL/SCF/CCF）（2025-11-29）
+
+CB 系とは別に、プレフィックスなしで A レジスタに対してのみ動くローテート／フラグ操作命令がある。  
+これらは GB の古い 8080 系譲りの命令で、**CB 系とはフラグ仕様が微妙に違う**点に注意する。
+
+#### 7.8.1 RLCA / RRCA / RLA / RRA
+
+- `RLCA (0x07)`
+  - 動作: A を 1bit 左ローテートし、元の bit7 を C と bit0 にコピー。
+  - フラグ:
+    - `Z = 0`（CB 系と違い、結果が 0 でも 0 に固定）
+    - `N = 0`
+    - `H = 0`
+    - `C = 元の A の bit7`
+  - サイクル: 4
+- `RRCA (0x0F)`
+  - 動作: A を 1bit 右ローテートし、元の bit0 を C と bit7 にコピー。
+  - フラグ:
+    - `Z = 0`
+    - `N = 0`
+    - `H = 0`
+    - `C = 元の A の bit0`
+  - サイクル: 4
+- `RLA (0x17)`
+  - 動作: C を巻き込みつつ A を左ローテート（`A ← (A << 1) | C_old`）。
+  - フラグ:
+    - `Z = 0`
+    - `N = 0`
+    - `H = 0`
+    - `C = 元の A の bit7`
+  - サイクル: 4
+- `RRA (0x1F)`
+  - 動作: C を巻き込みつつ A を右ローテート（`A ← (A >> 1) | (C_old << 7)`）。
+  - フラグ:
+    - `Z = 0`
+    - `N = 0`
+    - `H = 0`
+    - `C = 元の A の bit0`
+  - サイクル: 4
+
+これら 4 つは「**Z フラグを一切立てない**」点が CB 系ローテート（`RLC/RRC/RL/RR`）と決定的に異なる。  
+ACE のチャートを読むときは「CB 付きかどうか」で Z フラグの挙動が変わることに注意が必要。
+
+#### 7.8.2 CPL / SCF / CCF
+
+- `CPL (0x2F)` – 補数（A のビット反転）
+  - 動作: `A ← ~A`
+  - フラグ:
+    - `N = 1`
+    - `H = 1`
+    - `Z/C は変更なし`
+  - サイクル: 4
+- `SCF (0x37)` – Set Carry Flag
+  - 動作: キャリーフラグを 1 にセット
+  - フラグ:
+    - `C = 1`
+    - `N = 0`
+    - `H = 0`
+    - `Z は変更なし`
+  - サイクル: 4
+- `CCF (0x3F)` – Complement Carry Flag
+  - 動作: キャリーフラグを反転
+  - フラグ:
+    - `C = !C`
+    - `N = 0`
+    - `H = 0`
+    - `Z は変更なし`
+  - サイクル: 4
+
+これらは算術命令や条件分岐の直前に「C フラグだけを整える」目的でよく挟まれる。  
+特に ACE のチャート上では、「SCF で C=1 にしてから RRA で bit を落とす」「CCF で条件を反転する」といった使い方が現れるため、  
+**Z を変えない／C だけをいじる**という性質を覚えておくと読みやすくなる。
 
 ---
 

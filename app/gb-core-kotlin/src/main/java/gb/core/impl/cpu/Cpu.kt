@@ -77,6 +77,8 @@ class Cpu(
         const val CB_ROT_SHIFT_AT_HL: Int = 16
         const val CB_RES_SET_R: Int = 8
         const val CB_RES_SET_AT_HL: Int = 16
+        const val ROTATE_A: Int = 4
+        const val FLAG_MISC: Int = 4
     }
 
     val registers = Registers()
@@ -132,6 +134,14 @@ class Cpu(
             0x2D -> executeDec8({ registers.l }, ::setL) // DEC L
             0x3D -> executeDec8({ registers.a }, ::setA) // DEC A
             0x35 -> executeDecAtHL() // DEC (HL)
+            // A 専用ローテート／フラグ操作
+            0x07 -> executeRlca() // RLCA
+            0x0F -> executeRrca() // RRCA
+            0x17 -> executeRla() // RLA
+            0x1F -> executeRra() // RRA
+            0x2F -> executeCpl() // CPL
+            0x37 -> executeScf() // SCF
+            0x3F -> executeCcf() // CCF
             // 8bit 算術（A, r / A, n / A, (HL)）
             0x27 -> executeDaa() // DAA
             0x80 -> executeAlu(AluOp.ADD, registers.b) // ADD A, B
@@ -1237,6 +1247,119 @@ class Cpu(
             7 -> registers.a = value
             else -> error("Invalid CB register index (including (HL)): $index")
         }
+    }
+
+    /**
+     * RLCA: A を左ローテートし、bit7 を C と bit0 にコピー（Z=0, N=0, H=0）。
+     *
+     * - オペコード: 0x07
+     * - サイクル数: 4
+     */
+    private fun executeRlca(): Int {
+        val a = registers.a.toInt()
+        val carry = (a and 0x80) != 0
+        val result = ((a shl 1) and 0xFF) or if (carry) 0x01 else 0x00
+        registers.a = result.toUByte()
+        registers.flagZ = false
+        registers.flagN = false
+        registers.flagH = false
+        registers.flagC = carry
+        return Cycles.ROTATE_A
+    }
+
+    /**
+     * RRCA: A を右ローテートし、bit0 を C と bit7 にコピー（Z=0, N=0, H=0）。
+     *
+     * - オペコード: 0x0F
+     * - サイクル数: 4
+     */
+    private fun executeRrca(): Int {
+        val a = registers.a.toInt()
+        val carry = (a and 0x01) != 0
+        val result = (a ushr 1) or if (carry) 0x80 else 0x00
+        registers.a = result.toUByte()
+        registers.flagZ = false
+        registers.flagN = false
+        registers.flagH = false
+        registers.flagC = carry
+        return Cycles.ROTATE_A
+    }
+
+    /**
+     * RLA: C を巻き込みつつ A を左ローテート（Z=0, N=0, H=0）。
+     *
+     * - オペコード: 0x17
+     * - サイクル数: 4
+     */
+    private fun executeRla(): Int {
+        val a = registers.a.toInt()
+        val oldCarry = if (registers.flagC) 1 else 0
+        val carry = (a and 0x80) != 0
+        val result = ((a shl 1) and 0xFF) or oldCarry
+        registers.a = result.toUByte()
+        registers.flagZ = false
+        registers.flagN = false
+        registers.flagH = false
+        registers.flagC = carry
+        return Cycles.ROTATE_A
+    }
+
+    /**
+     * RRA: C を巻き込みつつ A を右ローテート（Z=0, N=0, H=0）。
+     *
+     * - オペコード: 0x1F
+     * - サイクル数: 4
+     */
+    private fun executeRra(): Int {
+        val a = registers.a.toInt()
+        val oldCarry = if (registers.flagC) 1 else 0
+        val carry = (a and 0x01) != 0
+        val result = (a ushr 1) or (oldCarry shl 7)
+        registers.a = result.toUByte()
+        registers.flagZ = false
+        registers.flagN = false
+        registers.flagH = false
+        registers.flagC = carry
+        return Cycles.ROTATE_A
+    }
+
+    /**
+     * CPL: A をビット反転し、N=1, H=1（Z/C は変更なし）。
+     *
+     * - オペコード: 0x2F
+     * - サイクル数: 4
+     */
+    private fun executeCpl(): Int {
+        registers.a = registers.a.inv()
+        registers.flagN = true
+        registers.flagH = true
+        return Cycles.FLAG_MISC
+    }
+
+    /**
+     * SCF: C=1, N=0, H=0（Z は変更なし）。
+     *
+     * - オペコード: 0x37
+     * - サイクル数: 4
+     */
+    private fun executeScf(): Int {
+        registers.flagC = true
+        registers.flagN = false
+        registers.flagH = false
+        return Cycles.FLAG_MISC
+    }
+
+    /**
+     * CCF: C を反転し、N=0, H=0（Z は変更なし）。
+     *
+     * - オペコード: 0x3F
+     * - サイクル数: 4
+     */
+    private fun executeCcf(): Int {
+        registers.flagC = !registers.flagC
+        registers.flagN = false
+        registers.flagH = false
+        return Cycles.FLAG_MISC
     }
 
     /**
