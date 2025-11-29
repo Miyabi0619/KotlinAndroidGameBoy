@@ -14,6 +14,13 @@ class Cpu(
 ) {
     private enum class AluOp {
         ADD,
+        ADC,
+        SUB,
+        SBC,
+        AND,
+        OR,
+        XOR,
+        CP,
     }
 
     /**
@@ -89,7 +96,7 @@ class Cpu(
             0x2D -> executeDec8({ registers.l }, ::setL) // DEC L
             0x3D -> executeDec8({ registers.a }, ::setA) // DEC A
             0x35 -> executeDecAtHL() // DEC (HL)
-            // 8bit 算術（現時点では ADD A, r/n/(HL) のみ）
+            // 8bit 算術（A, r / A, n / A, (HL)）
             0x80 -> executeAlu(AluOp.ADD, registers.b) // ADD A, B
             0x81 -> executeAlu(AluOp.ADD, registers.c) // ADD A, C
             0x82 -> executeAlu(AluOp.ADD, registers.d) // ADD A, D
@@ -99,6 +106,69 @@ class Cpu(
             0x87 -> executeAlu(AluOp.ADD, registers.a) // ADD A, A
             0x86 -> executeAluFromHL(AluOp.ADD) // ADD A, (HL)
             0xC6 -> executeAluImmediate(AluOp.ADD) // ADD A, n
+            0x88 -> executeAlu(AluOp.ADC, registers.b) // ADC A, B
+            0x89 -> executeAlu(AluOp.ADC, registers.c) // ADC A, C
+            0x8A -> executeAlu(AluOp.ADC, registers.d) // ADC A, D
+            0x8B -> executeAlu(AluOp.ADC, registers.e) // ADC A, E
+            0x8C -> executeAlu(AluOp.ADC, registers.h) // ADC A, H
+            0x8D -> executeAlu(AluOp.ADC, registers.l) // ADC A, L
+            0x8F -> executeAlu(AluOp.ADC, registers.a) // ADC A, A
+            0x8E -> executeAluFromHL(AluOp.ADC) // ADC A, (HL)
+            0xCE -> executeAluImmediate(AluOp.ADC) // ADC A, n
+            0x90 -> executeAlu(AluOp.SUB, registers.b) // SUB B
+            0x91 -> executeAlu(AluOp.SUB, registers.c) // SUB C
+            0x92 -> executeAlu(AluOp.SUB, registers.d) // SUB D
+            0x93 -> executeAlu(AluOp.SUB, registers.e) // SUB E
+            0x94 -> executeAlu(AluOp.SUB, registers.h) // SUB H
+            0x95 -> executeAlu(AluOp.SUB, registers.l) // SUB L
+            0x97 -> executeAlu(AluOp.SUB, registers.a) // SUB A
+            0x96 -> executeAluFromHL(AluOp.SUB) // SUB (HL)
+            0xD6 -> executeAluImmediate(AluOp.SUB) // SUB n
+            0x98 -> executeAlu(AluOp.SBC, registers.b) // SBC A, B
+            0x99 -> executeAlu(AluOp.SBC, registers.c) // SBC A, C
+            0x9A -> executeAlu(AluOp.SBC, registers.d) // SBC A, D
+            0x9B -> executeAlu(AluOp.SBC, registers.e) // SBC A, E
+            0x9C -> executeAlu(AluOp.SBC, registers.h) // SBC A, H
+            0x9D -> executeAlu(AluOp.SBC, registers.l) // SBC A, L
+            0x9F -> executeAlu(AluOp.SBC, registers.a) // SBC A, A
+            0x9E -> executeAluFromHL(AluOp.SBC) // SBC A, (HL)
+            0xDE -> executeAluImmediate(AluOp.SBC) // SBC A, n
+            0xA0 -> executeAlu(AluOp.AND, registers.b) // AND B
+            0xA1 -> executeAlu(AluOp.AND, registers.c) // AND C
+            0xA2 -> executeAlu(AluOp.AND, registers.d) // AND D
+            0xA3 -> executeAlu(AluOp.AND, registers.e) // AND E
+            0xA4 -> executeAlu(AluOp.AND, registers.h) // AND H
+            0xA5 -> executeAlu(AluOp.AND, registers.l) // AND L
+            0xA7 -> executeAlu(AluOp.AND, registers.a) // AND A
+            0xA6 -> executeAluFromHL(AluOp.AND) // AND (HL)
+            0xE6 -> executeAluImmediate(AluOp.AND) // AND n
+            0xA8 -> executeAlu(AluOp.XOR, registers.b) // XOR B
+            0xA9 -> executeAlu(AluOp.XOR, registers.c) // XOR C
+            0xAA -> executeAlu(AluOp.XOR, registers.d) // XOR D
+            0xAB -> executeAlu(AluOp.XOR, registers.e) // XOR E
+            0xAC -> executeAlu(AluOp.XOR, registers.h) // XOR H
+            0xAD -> executeAlu(AluOp.XOR, registers.l) // XOR L
+            0xAF -> executeAlu(AluOp.XOR, registers.a) // XOR A
+            0xAE -> executeAluFromHL(AluOp.XOR) // XOR (HL)
+            0xEE -> executeAluImmediate(AluOp.XOR) // XOR n
+            0xB0 -> executeAlu(AluOp.OR, registers.b) // OR B
+            0xB1 -> executeAlu(AluOp.OR, registers.c) // OR C
+            0xB2 -> executeAlu(AluOp.OR, registers.d) // OR D
+            0xB3 -> executeAlu(AluOp.OR, registers.e) // OR E
+            0xB4 -> executeAlu(AluOp.OR, registers.h) // OR H
+            0xB5 -> executeAlu(AluOp.OR, registers.l) // OR L
+            0xB7 -> executeAlu(AluOp.OR, registers.a) // OR A
+            0xB6 -> executeAluFromHL(AluOp.OR) // OR (HL)
+            0xF6 -> executeAluImmediate(AluOp.OR) // OR n
+            0xB8 -> executeAlu(AluOp.CP, registers.b) // CP B
+            0xB9 -> executeAlu(AluOp.CP, registers.c) // CP C
+            0xBA -> executeAlu(AluOp.CP, registers.d) // CP D
+            0xBB -> executeAlu(AluOp.CP, registers.e) // CP E
+            0xBC -> executeAlu(AluOp.CP, registers.h) // CP H
+            0xBD -> executeAlu(AluOp.CP, registers.l) // CP L
+            0xBF -> executeAlu(AluOp.CP, registers.a) // CP A
+            0xBE -> executeAluFromHL(AluOp.CP) // CP (HL)
+            0xFE -> executeAluImmediate(AluOp.CP) // CP n
             // 16bit INC/DEC
             0x03 -> executeIncBC()
             0x0B -> executeDecBC()
@@ -366,7 +436,7 @@ class Cpu(
     }
 
     /**
-     * A とオペランドを用いた 8bit 算術（現時点では ADD のみ）のコア処理。
+     * A とオペランドを用いた 8bit 算術のコア処理。
      *
      * - この関数は A とフラグを更新するだけで、PC・サイクル数は呼び出し元で扱う。
      */
@@ -375,18 +445,72 @@ class Cpu(
         operand: UByte,
     ) {
         val a = registers.a
+        val aInt = a.toInt()
+        val bInt = operand.toInt()
         when (op) {
             AluOp.ADD -> {
-                val aInt = a.toInt()
-                val bInt = operand.toInt()
                 val sum = aInt + bInt
                 val result = sum and 0xFF
-
                 registers.a = result.toUByte()
                 registers.flagZ = result == 0
                 registers.flagN = false
                 registers.flagH = (aInt and 0x0F) + (bInt and 0x0F) > 0x0F
                 registers.flagC = sum > 0xFF
+            }
+            AluOp.ADC -> {
+                val carry = if (registers.flagC) 1 else 0
+                val sum = aInt + bInt + carry
+                val result = sum and 0xFF
+                registers.a = result.toUByte()
+                registers.flagZ = result == 0
+                registers.flagN = false
+                registers.flagH = (aInt and 0x0F) + (bInt and 0x0F) + carry > 0x0F
+                registers.flagC = sum > 0xFF
+            }
+            AluOp.SUB, AluOp.CP -> {
+                val diff = aInt - bInt
+                val result = diff and 0xFF
+                if (op != AluOp.CP) {
+                    registers.a = result.toUByte()
+                }
+                registers.flagZ = result == 0
+                registers.flagN = true
+                registers.flagH = (aInt and 0x0F) < (bInt and 0x0F)
+                registers.flagC = aInt < bInt
+            }
+            AluOp.SBC -> {
+                val carry = if (registers.flagC) 1 else 0
+                val diff = aInt - bInt - carry
+                val result = diff and 0xFF
+                registers.a = result.toUByte()
+                registers.flagZ = result == 0
+                registers.flagN = true
+                registers.flagH = (aInt and 0x0F) < ((bInt and 0x0F) + carry)
+                registers.flagC = aInt < bInt + carry
+            }
+            AluOp.AND -> {
+                val result = (aInt and bInt) and 0xFF
+                registers.a = result.toUByte()
+                registers.flagZ = result == 0
+                registers.flagN = false
+                registers.flagH = true
+                registers.flagC = false
+            }
+            AluOp.OR -> {
+                val result = (aInt or bInt) and 0xFF
+                registers.a = result.toUByte()
+                registers.flagZ = result == 0
+                registers.flagN = false
+                registers.flagH = false
+                registers.flagC = false
+            }
+            AluOp.XOR -> {
+                val result = (aInt xor bInt) and 0xFF
+                registers.a = result.toUByte()
+                registers.flagZ = result == 0
+                registers.flagN = false
+                registers.flagH = false
+                registers.flagC = false
             }
         }
     }
