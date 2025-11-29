@@ -26,6 +26,11 @@ class SystemBus(
     private val cartridgeRam: UByteArray? = null,
     private val interruptController: InterruptController,
     private val timer: Timer,
+    /**
+     * ROM が MBC1 カートリッジであれば Mbc1 インスタンスを渡す。
+     * それ以外のカートリッジでは null（ノーマッパ）とする。
+     */
+    private val mbc1: Mbc1? = null,
 ) : Bus {
     /**
      * Joypad 入力レジスタ（FF00）。
@@ -43,21 +48,31 @@ class SystemBus(
 
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
-        return when (addr) {
-            in 0x0000..0x7FFF -> {
-                rom.getOrElse(addr) { 0xFFu }
+        return readByteInternal(addr)
+    }
+
+    private fun readByteInternal(addr: Int): UByte =
+        when {
+            addr in 0x0000..0x3FFF -> {
+                val index = mbc1?.mapRom0(addr) ?: addr
+                rom.getOrElse(index) { 0xFFu }
             }
-            in 0x8000..0x9FFF -> {
-                vram[addr - 0x8000]
+            addr in 0x4000..0x7FFF -> {
+                val index = mbc1?.mapRomX(addr) ?: addr
+                rom.getOrElse(index) { 0xFFu }
             }
-            in 0xA000..0xBFFF -> {
+            addr in 0x8000..0x9FFF -> vram[addr - 0x8000]
+            addr in 0xA000..0xBFFF -> {
                 val ram = cartridgeRam ?: return 0xFFu
-                ram[addr - 0xA000]
+                val ramIndex = mbc1?.mapRam(addr) ?: (addr - 0xA000)
+                if (ramIndex !in 0 until ram.size) {
+                    0xFFu
+                } else {
+                    ram[ramIndex]
+                }
             }
-            in 0xC000..0xDFFF -> {
-                wram[addr - 0xC000]
-            }
-            in 0xE000..0xFDFF -> {
+            addr in 0xC000..0xDFFF -> wram[addr - 0xC000]
+            addr in 0xE000..0xFDFF -> {
                 // Echo RAM（C000–DDFF のミラー）
                 val echoAddr = addr - 0x2000
                 if (echoAddr in 0xC000..0xDFFF) {
@@ -66,30 +81,20 @@ class SystemBus(
                     0xFFu
                 }
             }
-            in 0xFE00..0xFE9F -> {
-                oam[addr - 0xFE00]
-            }
-            in 0xFEA0..0xFEFF -> {
-                // 未使用領域
-                0xFFu
-            }
-            0xFF00 -> joypadReg
-            in 0xFF04..0xFF07 -> {
+            addr in 0xFE00..0xFE9F -> oam[addr - 0xFE00]
+            addr in 0xFEA0..0xFEFF -> 0xFFu // 未使用領域
+            addr == 0xFF00 -> joypadReg
+            addr in 0xFF04..0xFF07 -> {
                 // タイマレジスタ（DIV/TIMA/TMA/TAC）
                 val offset = addr - 0xFF04
                 timer.readRegister(offset)
             }
-            0xFF0F -> interruptController.readIf()
-            in 0xFF10..0xFF7F -> {
-                ioRegs[addr - 0xFF10]
-            }
-            in 0xFF80..0xFFFE -> {
-                hram[addr - 0xFF80]
-            }
-            0xFFFF -> interruptController.readIe()
+            addr == 0xFF0F -> interruptController.readIf()
+            addr in 0xFF10..0xFF7F -> ioRegs[addr - 0xFF10]
+            addr in 0xFF80..0xFFFE -> hram[addr - 0xFF80]
+            addr == 0xFFFF -> interruptController.readIe()
             else -> 0xFFu
         }
-    }
 
     override fun writeByte(
         address: UShort,
@@ -98,14 +103,22 @@ class SystemBus(
         val addr = address.toInt()
         when (addr) {
             in 0x0000..0x7FFF -> {
-                // ROM 領域（将来的には MBC による制御が入るが、今は読み取り専用）
+                // MBC 制御レジスタ
+                mbc1?.writeControl(addr, value)
             }
             in 0x8000..0x9FFF -> {
                 vram[addr - 0x8000] = value
             }
             in 0xA000..0xBFFF -> {
                 val ram = cartridgeRam ?: return
-                ram[addr - 0xA000] = value
+                val ramIndex =
+                    mbc1
+                        ?.mapRam(addr)
+                        ?: (addr - 0xA000)
+                if (ramIndex !in 0 until ram.size) {
+                    return
+                }
+                ram[ramIndex] = value
             }
             in 0xC000..0xDFFF -> {
                 wram[addr - 0xC000] = value

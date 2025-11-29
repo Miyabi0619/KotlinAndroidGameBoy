@@ -983,6 +983,154 @@ ACE 的には「どのアドレスから割り込みハンドラに入り、ど�
 
 ---
 
+## 8. MBC1 と最小限の PPU・マシン統合（2025-11-29）
+
+### 8.1 MBC1 の最小実装
+
+ポケモン赤・緑などの典型的なカートリッジは MBC1 を使っており、  
+CPU から見る 16bit アドレス空間（0x0000–0xFFFF）と、ROM/カートリッジ RAM の物理サイズの差を「バンク切り替え」で吸収している。
+
+このプロジェクトでは、まず **Pokémon Red が普通に使う範囲** に絞った MBC1 の最小実装を `Mbc1` クラスとして用意した。
+
+```1:120:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Mbc1.kt
+class Mbc1(
+    private val romSize: Int,
+    private val ramSize: Int,
+) {
+    private var ramEnabled: Boolean = false
+    private var romBankLow5: Int = 1
+    private var bankHigh2: Int = 0
+    private var bankingModeRam: Boolean = false
+
+    fun writeControl(address: Int, value: UByte) { /* ... */ }
+    fun mapRom0(address: Int): Int { /* ... */ }
+    fun mapRomX(address: Int): Int { /* ... */ }
+    fun mapRam(address: Int): Int? { /* ... */ }
+}
+```
+
+主なポイントは以下の通り。
+
+- **制御レジスタ（0000–7FFF への書き込み）**
+  - `0000–1FFF`: RAM Enable（下位 4bit が 0x0A ならカートリッジ RAM 有効）
+  - `2000–3FFF`: ROM バンク番号の下位 5bit
+  - `4000–5FFF`: 上位 2bit（ROM バンクの bit5-6 または RAM バンク番号）
+  - `6000–7FFF`: バンキングモード（`0: ROM バンキング`, `1: RAM バンキング`）
+- **ROM マッピング**
+  - `mapRom0`:
+    - 0000–3FFF に対して、ROM モードでは常にバンク 0
+    - RAM モードでは `bankHigh2` を上位ビットにした「大きなバンク 0」
+  - `mapRomX`:
+    - 4000–7FFF を「現在選択中のスイッチバンク」にマップする
+    - 0 番バンクは禁止なので 1 にマップし、`0x20/0x40/0x60` などの無効番号も 1 つ進めてスキップ
+- **RAM マッピング**
+  - `mapRam`:
+    - RAM が有効でなければ `null`
+    - RAM モード時のみ `bankHigh2` を RAM バンク番号として使う（最大 4 バンク）
+    - アドレス範囲外は `null`
+
+### 8.2 SystemBus への統合
+
+`SystemBus` にオプションとして `mbc1: Mbc1?` を受け取るよう拡張し、  
+ROM・カートリッジ RAM のアクセスを MBC1 経由にした。
+
+```20:89:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/SystemBus.kt
+class SystemBus(
+    private val rom: UByteArray,
+    /* ... */
+    private val interruptController: InterruptController,
+    private val timer: Timer,
+    private val mbc1: Mbc1? = null,
+) : Bus {
+    override fun readByte(address: UShort): UByte {
+        val addr = address.toInt()
+        return when (addr) {
+            in 0x0000..0x3FFF -> {
+                val index = mbc1?.mapRom0(addr) ?: addr
+                rom.getOrElse(index) { 0xFFu }
+            }
+            in 0x4000..0x7FFF -> {
+                val index = mbc1?.mapRomX(addr) ?: addr
+                rom.getOrElse(index) { 0xFFu }
+            }
+            in 0xA000..0xBFFF -> {
+                val ram = cartridgeRam ?: return 0xFFu
+                val ramIndex = mbc1?.mapRam(addr) ?: (addr - 0xA000)
+                /* ... */
+            }
+            /* ... */
+        }
+    }
+
+    override fun writeByte(address: UShort, value: UByte) {
+        val addr = address.toInt()
+        when (addr) {
+            in 0x0000..0x7FFF -> {
+                mbc1?.writeControl(addr, value)
+            }
+            in 0xA000..0xBFFF -> {
+                val ram = cartridgeRam ?: return
+                val ramIndex = mbc1?.mapRam(addr) ?: (addr - 0xA000)
+                /* ... */
+            }
+            /* ... */
+        }
+    }
+}
+```
+
+これにより、CPU から見るアドレス空間は変えずに、  
+ROM/RAM 実体のどのバンクを参照するかを MBC1 に任せられるようになった。
+
+単体テスト `Mbc1Test` では、
+
+- ROM 各バンクの先頭にバンク番号を書き込んでおき、`mapRomX` 経由で値が変わること
+- RAM Enable／RAM モード＋バンク番号で `mapRam` の結果が変わること
+
+を確認している。
+
+### 8.3 最小限の PPU スケルトン
+
+描画周りについては、まず「**CPU と VRAM は実装済み / 画面は真っ黒でよい**」という前提で  
+PPU の器だけを `Ppu` クラスとして用意した。
+
+```1:40:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Ppu.kt
+class Ppu(
+    private val vram: UByteArray,
+) {
+    companion object {
+        const val SCREEN_WIDTH = 160
+        const val SCREEN_HEIGHT = 144
+    }
+
+    fun step(cycles: Int) {
+        // TODO(miyabi): PPU のモード遷移などを実装
+    }
+
+    fun renderFrame(): IntArray {
+        val pixels = IntArray(SCREEN_WIDTH * SCREEN_HEIGHT)
+        val black = 0xFF000000.toInt()
+        for (i in pixels.indices) {
+            pixels[i] = black
+        }
+        return pixels
+    }
+}
+```
+
+現段階では:
+
+- `step(cycles)` は「PPU の内部時間を進めるだけ」のダミー（何もしない）
+- `renderFrame()` は常に真っ黒な 160x144 の ARGB 配列を返す
+
+という仕様にとどめておき、  
+**CPU・MBC1・SystemBus・割り込み／タイマまわりの挙動を先に固める**ことを優先している。
+
+PPU の本格的な実装（LCDC/STAT、タイル／背景／スプライト、スキャンライン処理など）は、  
+ポケモンの ACE を読み解く上で必要になったタイミングで追加していく。
+
+---
+
 ## 参考資料
 
 - [Game Boy CPU Manual](https://ia803208.us.archive.org/30/items/GameBoyProgManVer1.1/GameBoyProgManVer1.1.pdf)（英語、公式マニュアル）
