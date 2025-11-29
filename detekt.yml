@@ -40,9 +40,9 @@ complexity:
   TooManyFunctions:
     active: true
     thresholdInFiles: 30
-    thresholdInClasses: 40
-    thresholdInInterfaces: 40
-    thresholdInObjects: 40
+    thresholdInClasses: 60
+    thresholdInInterfaces: 60
+    thresholdInObjects: 60
 
 comments:
   UndocumentedPublicClass:

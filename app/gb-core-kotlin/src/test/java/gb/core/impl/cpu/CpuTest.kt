@@ -875,6 +875,96 @@ class CpuTest {
     }
 
     @Test
+    fun `JP nn jumps to absolute address`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: C3 nn nn (JP nn), nn=0x1234
+        memory[0x0100] = 0xC3u
+        memory[0x0101] = 0x34u // low
+        memory[0x0102] = 0x12u // high
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(16, cycles)
+        assertEquals(0x1234u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `JP NZ nn only jumps when Z is false`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        memory[0x0100] = 0xC2u // JP NZ, nn
+        memory[0x0101] = 0x00u
+        memory[0x0102] = 0x20u // nn=0x2000
+
+        val cpu = Cpu(bus)
+
+        // Z=false → ジャンプする
+        cpu.registers.pc = 0x0100u
+        cpu.registers.flagZ = false
+        var cycles = cpu.executeInstruction()
+        assertEquals(16, cycles)
+        assertEquals(0x2000u.toUShort(), cpu.registers.pc)
+
+        // Z=true → ジャンプしない（PC は即値分だけ進む）
+        cpu.registers.pc = 0x0100u
+        cpu.registers.flagZ = true
+        cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        assertEquals(0x0103u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `JR e jumps relative with signed offset`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 18 FE (JR -2) → 0x0100 に戻る
+        memory[0x0100] = 0x18u
+        memory[0x0101] = 0xFEu // -2
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(12, cycles)
+        assertEquals(0x0100u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `JR Z e only jumps when Z is true`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 28 02 (JR Z, +2)
+        memory[0x0100] = 0x28u
+        memory[0x0101] = 0x02u
+
+        val cpu = Cpu(bus)
+
+        // Z=true → ジャンプする
+        cpu.registers.pc = 0x0100u
+        cpu.registers.flagZ = true
+        var cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        // PC: 0x0100 (opcode) -> 0x0101 (after fetch) -> 0x0102 (after reading e) -> 0x0104 (+2)
+        assertEquals(0x0104u.toUShort(), cpu.registers.pc)
+
+        // Z=false → ジャンプしない（PC は即値分だけ進む）
+        cpu.registers.pc = 0x0100u
+        cpu.registers.flagZ = false
+        cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
     fun `ADD A B adds registers and sets flags correctly`() {
         val memory = UByteArray(MEMORY_SIZE) { 0x00u }
         val bus = InMemoryBus(memory)
@@ -947,6 +1037,139 @@ class CpuTest {
         assertEquals(false, cpu.registers.flagN)
         assertEquals(false, cpu.registers.flagH)
         assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `DAA adjusts A for BCD after ADD and SUB`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x27 (DAA)
+        memory[0x0100] = 0x27u
+
+        val cpu = Cpu(bus)
+
+        // 加算後の例: A=0x0A, H=1, C=0 -> 0x10
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x0Au
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles1 = cpu.executeInstruction()
+
+        assertEquals(4, cycles1)
+        assertEquals(0x10u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+
+        // 減算後の例: A=0x15, N=1, H=1, C=0 -> 0x0F
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x15u
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles2 = cpu.executeInstruction()
+
+        assertEquals(4, cycles2)
+        assertEquals(0x0Fu.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `JP nn sets PC to absolute address`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: C3 34 12  (JP 0x1234)
+        memory[0x0100] = 0xC3u
+        memory[0x0101] = 0x34u // low
+        memory[0x0102] = 0x12u // high
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(16, cycles)
+        assertEquals(0x1234u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `JP NZ nn jumps only when Z is false`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: C2 78 56  (JP NZ, 0x5678)
+        memory[0x0100] = 0xC2u
+        memory[0x0101] = 0x78u
+        memory[0x0102] = 0x56u
+
+        val cpu = Cpu(bus)
+
+        // Z = false → ジャンプする
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = false
+        var cycles = cpu.executeInstruction()
+        assertEquals(16, cycles)
+        assertEquals(0x5678u.toUShort(), cpu.registers.pc)
+
+        // Z = true → ジャンプしない（PC は即値を読み飛ばして 0x0103）
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = true
+        cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        assertEquals(0x0103u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `JR e adds signed offset to PC`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 18 FE  (JR -2)  → PC=0x0100 -> 0x0102 -> 0x0100
+        memory[0x0100] = 0x18u
+        memory[0x0101] = 0xFEu // -2
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(12, cycles)
+        assertEquals(0x0100u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `JR NZ e jumps only when Z is false`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 20 02  (JR NZ, +2)
+        memory[0x0100] = 0x20u
+        memory[0x0101] = 0x02u
+
+        val cpu = Cpu(bus)
+
+        // Z = false → ジャンプする: PC=0x0100 -> 0x0102 -> 0x0104
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = false
+        var cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        assertEquals(0x0104u.toUShort(), cpu.registers.pc)
+
+        // Z = true → ジャンプしない: PC=0x0100 -> 0x0102
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = true
+        cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
     }
 
     private class InMemoryBus(

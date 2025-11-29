@@ -23,6 +23,13 @@ class Cpu(
         CP,
     }
 
+    private enum class Condition {
+        NZ,
+        Z,
+        NC,
+        C,
+    }
+
     /**
      * 1 命令あたりのサイクル数を表す定数群。
      * 今後命令が増えた場合もここに追加していく。
@@ -33,6 +40,12 @@ class Cpu(
         const val ALU_R: Int = 4
         const val ALU_N: Int = 8
         const val ALU_FROM_HL: Int = 8
+        const val JP: Int = 16
+        const val JP_COND_TAKEN: Int = 16
+        const val JP_COND_NOT_TAKEN: Int = 12
+        const val JR: Int = 12
+        const val JR_COND_TAKEN: Int = 12
+        const val JR_COND_NOT_TAKEN: Int = 8
         const val INC_R: Int = 4
         const val DEC_R: Int = 4
         const val INC_16: Int = 8
@@ -97,6 +110,7 @@ class Cpu(
             0x3D -> executeDec8({ registers.a }, ::setA) // DEC A
             0x35 -> executeDecAtHL() // DEC (HL)
             // 8bit 算術（A, r / A, n / A, (HL)）
+            0x27 -> executeDaa() // DAA
             0x80 -> executeAlu(AluOp.ADD, registers.b) // ADD A, B
             0x81 -> executeAlu(AluOp.ADD, registers.c) // ADD A, C
             0x82 -> executeAlu(AluOp.ADD, registers.d) // ADD A, D
@@ -169,6 +183,18 @@ class Cpu(
             0xBF -> executeAlu(AluOp.CP, registers.a) // CP A
             0xBE -> executeAluFromHL(AluOp.CP) // CP (HL)
             0xFE -> executeAluImmediate(AluOp.CP) // CP n
+            // JP nn / JP cc, nn
+            0xC3 -> executeJpUnconditional() // JP nn
+            0xC2 -> executeJpConditional(Condition.NZ) // JP NZ, nn
+            0xCA -> executeJpConditional(Condition.Z) // JP Z, nn
+            0xD2 -> executeJpConditional(Condition.NC) // JP NC, nn
+            0xDA -> executeJpConditional(Condition.C) // JP C, nn
+            // JR e / JR cc, e
+            0x18 -> executeJrUnconditional() // JR e
+            0x20 -> executeJrConditional(Condition.NZ) // JR NZ, e
+            0x28 -> executeJrConditional(Condition.Z) // JR Z, e
+            0x30 -> executeJrConditional(Condition.NC) // JR NC, e
+            0x38 -> executeJrConditional(Condition.C) // JR C, e
             // 16bit INC/DEC
             0x03 -> executeIncBC()
             0x0B -> executeDecBC()
@@ -435,6 +461,30 @@ class Cpu(
         return Cycles.INC_DEC_AT_HL
     }
 
+    private fun checkCondition(cond: Condition): Boolean =
+        when (cond) {
+            Condition.NZ -> !registers.flagZ
+            Condition.Z -> registers.flagZ
+            Condition.NC -> !registers.flagC
+            Condition.C -> registers.flagC
+        }
+
+    /**
+     * 指定アドレスから 16bit の値（リトルエンディアン）を読み出す。
+     *
+     * - low = [address], high = [address+1] として (high << 8) | low を返す
+     */
+    private fun readWordAt(address: UShort): UShort {
+        val low = bus.readByte(address).toInt()
+        val high = bus.readByte((address.toInt() + 1).toUShort()).toInt()
+        return ((high shl 8) or low).toUShort()
+    }
+
+    private fun signExtend(offset: UByte): Int {
+        val raw = offset.toInt()
+        return if (raw and 0x80 != 0) raw or -0x100 else raw
+    }
+
     /**
      * A とオペランドを用いた 8bit 算術のコア処理。
      *
@@ -516,6 +566,48 @@ class Cpu(
     }
 
     /**
+     * DAA 命令: A を BCD（10進）に調整する。
+     *
+     * - オペコード: 0x27
+     * - 直前の演算とフラグ（N/H/C）に応じて A を補正する。
+     * - サイクル数: 4
+     */
+    private fun executeDaa(): Int {
+        var a = registers.a.toInt()
+        var adjust = 0
+        var carry = registers.flagC
+
+        if (!registers.flagN) {
+            // 直前が加算系
+            if (registers.flagH || (a and 0x0F) > 0x09) {
+                adjust += 0x06
+            }
+            if (carry || a > 0x99) {
+                adjust += 0x60
+                carry = true
+            }
+            a = (a + adjust) and 0xFF
+        } else {
+            // 直前が減算系
+            if (registers.flagH) {
+                adjust += 0x06
+            }
+            if (carry) {
+                adjust += 0x60
+            }
+            a = (a - adjust) and 0xFF
+        }
+
+        registers.a = a.toUByte()
+        registers.flagZ = a == 0
+        // N はそのまま（直前の ADD/SUB の種別を保持）
+        registers.flagH = false
+        registers.flagC = carry
+
+        return Cycles.ALU_R
+    }
+
+    /**
      * A, r 形式の ALU 命令（レジスタ版）。
      *
      * - 例: ADD A, B (`0x80`)
@@ -556,6 +648,63 @@ class Cpu(
         val value = bus.readByte(address)
         applyAlu(op, value)
         return Cycles.ALU_FROM_HL
+    }
+
+    /**
+     * JP nn（無条件）の実装。
+     */
+    private fun executeJpUnconditional(): Int {
+        val pc = registers.pc
+        val target = readWordAt(pc)
+        registers.pc = target
+        return Cycles.JP
+    }
+
+    /**
+     * JP cc, nn（条件付き）の実装。
+     */
+    private fun executeJpConditional(cond: Condition): Int {
+        val pc = registers.pc
+        val target = readWordAt(pc)
+        // 即値 2 バイト分を読み飛ばす
+        registers.pc = (pc.toInt() + 2).toUShort()
+        return if (checkCondition(cond)) {
+            registers.pc = target
+            Cycles.JP_COND_TAKEN
+        } else {
+            Cycles.JP_COND_NOT_TAKEN
+        }
+    }
+
+    /**
+     * JR e（無条件）の実装。
+     */
+    private fun executeJrUnconditional(): Int {
+        val pc = registers.pc
+        val offset = bus.readByte(pc)
+        // 即値 1 バイト分を読み飛ばす
+        val pcAfterImmediate = (pc.toInt() + 1).toUShort()
+        val newPc = pcAfterImmediate.toInt() + signExtend(offset)
+        registers.pc = newPc.toUShort()
+        return Cycles.JR
+    }
+
+    /**
+     * JR cc, e（条件付き）の実装。
+     */
+    private fun executeJrConditional(cond: Condition): Int {
+        val pc = registers.pc
+        val offset = bus.readByte(pc)
+        // 即値 1 バイト分を読み飛ばす
+        val pcAfterImmediate = (pc.toInt() + 1).toUShort()
+        registers.pc = pcAfterImmediate
+        return if (checkCondition(cond)) {
+            val newPc = pcAfterImmediate.toInt() + signExtend(offset)
+            registers.pc = newPc.toUShort()
+            Cycles.JR_COND_TAKEN
+        } else {
+            Cycles.JR_COND_NOT_TAKEN
+        }
     }
 
     /**
