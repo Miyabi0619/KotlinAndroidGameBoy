@@ -1375,6 +1375,212 @@ class CpuTest {
         assertEquals(false, cpu.registers.flagC)
     }
 
+    @Test
+    fun `LD rr nn loads 16bit immediate`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 01 34 12  (LD BC, 0x1234)
+        memory[0x0100] = 0x01u
+        memory[0x0101] = 0x34u
+        memory[0x0102] = 0x12u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(12, cycles)
+        assertEquals(0x0103u.toUShort(), cpu.registers.pc)
+        assertEquals(0x1234u.toUShort(), cpu.registers.bc)
+    }
+
+    @Test
+    fun `LD SP HL copies HL into SP`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: F9 (LD SP, HL)
+        memory[0x0100] = 0xF9u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xABCDu
+        cpu.registers.sp = 0x0000u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        assertEquals(0xABCDu.toUShort(), cpu.registers.sp)
+    }
+
+    @Test
+    fun `LD nn SP stores SP to memory`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 08 00 C0  (LD (0xC000), SP)
+        memory[0x0100] = 0x08u
+        memory[0x0101] = 0x00u
+        memory[0x0102] = 0xC0u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0x1234u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(20, cycles)
+        assertEquals(0x0103u.toUShort(), cpu.registers.pc)
+        assertEquals(0x34u.toUByte(), bus.readByte(0xC000u))
+        assertEquals(0x12u.toUByte(), bus.readByte(0xC001u))
+    }
+
+    @Test
+    fun `LD HL SP plus e adds signed offset and sets flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: F8 02  (LD HL, SP+2)
+        memory[0x0100] = 0xF8u
+        memory[0x0101] = 0x02u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFF8u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(12, cycles)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+        assertEquals(0xFFFAu.toUShort(), cpu.registers.hl)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+    }
+
+    @Test
+    fun `LD A indirect via BC and DE`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0A 1A  (LD A,(BC); LD A,(DE))
+        memory[0x0100] = 0x0Au
+        memory[0x0101] = 0x1Au
+
+        // メモリ 0x1234=0x42, 0x5678=0x99
+        memory[0x1234] = 0x42u
+        memory[0x5678] = 0x99u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.bc = 0x1234u
+        cpu.registers.de = 0x5678u
+
+        val cycles1 = cpu.executeInstruction()
+        assertEquals(8, cycles1)
+        assertEquals(0x42u.toUByte(), cpu.registers.a)
+
+        val cycles2 = cpu.executeInstruction()
+        assertEquals(8, cycles2)
+        assertEquals(0x99u.toUByte(), cpu.registers.a)
+    }
+
+    @Test
+    fun `LD indirect via BC and DE from A`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 02 12  (LD (BC),A; LD (DE),A)
+        memory[0x0100] = 0x02u
+        memory[0x0101] = 0x12u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.bc = 0x1234u
+        cpu.registers.de = 0x5678u
+        cpu.registers.a = 0xAAu
+
+        val cycles1 = cpu.executeInstruction()
+        assertEquals(8, cycles1)
+        assertEquals(0xAAu.toUByte(), bus.readByte(0x1234u))
+
+        val cycles2 = cpu.executeInstruction()
+        assertEquals(8, cycles2)
+        assertEquals(0xAAu.toUByte(), bus.readByte(0x5678u))
+    }
+
+    @Test
+    fun `LD A and memory via nn`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: FA 00 C0  EA 02 C0
+        // LD A,(0xC000); LD (0xC002),A
+        memory[0x0100] = 0xFAu
+        memory[0x0101] = 0x00u
+        memory[0x0102] = 0xC0u
+        memory[0x0103] = 0xEAu
+        memory[0x0104] = 0x02u
+        memory[0x0105] = 0xC0u
+
+        memory[0xC000] = 0x55u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cycles1 = cpu.executeInstruction()
+        assertEquals(16, cycles1)
+        assertEquals(0x55u.toUByte(), cpu.registers.a)
+
+        val cycles2 = cpu.executeInstruction()
+        assertEquals(16, cycles2)
+        assertEquals(0x55u.toUByte(), bus.readByte(0xC002u))
+    }
+
+    @Test
+    fun `LDH with immediate and C offset`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: E0 10  F0 10  E2  F2
+        // LDH (0x10),A; LDH A,(0x10); LD (C),A; LD A,(C)
+        memory[0x0100] = 0xE0u
+        memory[0x0101] = 0x10u
+        memory[0x0102] = 0xF0u
+        memory[0x0103] = 0x10u
+        memory[0x0104] = 0xE2u
+        memory[0x0105] = 0xF2u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x77u
+
+        // LDH (n),A
+        var cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        assertEquals(0x77u.toUByte(), bus.readByte(0xFF10u))
+
+        // LDH A,(n)
+        cpu.registers.a = 0x00u
+        cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        assertEquals(0x77u.toUByte(), cpu.registers.a)
+
+        // LD (C),A
+        cpu.registers.c = 0x20u
+        cpu.registers.a = 0x99u
+        cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(0x99u.toUByte(), bus.readByte(0xFF20u))
+
+        // LD A,(C)
+        cpu.registers.a = 0x00u
+        cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(0x99u.toUByte(), cpu.registers.a)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

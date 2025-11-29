@@ -689,6 +689,108 @@ ACE 解説の際には「どの RST からどの処理に飛んでいるか」�
 
 ---
 
+### 7.7 残りの LD 系（16bit 即値ロード・SP 周辺・高位 I/O）（2025-11-29）
+
+フェーズ3の一部として、これまで後回しにしていた「16bit 即値ロード」「SP とメモリのやり取り」「高位 I/O（HRAM）アクセス」関連の LD 命令をまとめて実装した。
+
+#### 7.7.1 16bit 即値ロード LD rr, nn
+
+- 対応 opcode:
+  - `0x01` … `LD BC, nn`
+  - `0x11` … `LD DE, nn`
+  - `0x21` … `LD HL, nn`
+  - `0x31` … `LD SP, nn`
+- フォーマット: `[OPCODE][low][high]`
+- 動作:
+  - `value = readWordAt(PC)`（low/high を 16bit に組み立て）
+  - `PC ← PC + 2`
+  - 対応する 16bit レジスタ（BC/DE/HL/SP）に `value` を代入
+- サイクル: 12
+- 実装は `executeLd16Immediate(set: (UShort) -> Unit)` に集約し、`executeByOpcode` から「どのレジスタに書くか」だけ渡す形にしている。
+
+#### 7.7.2 SP とメモリの LD（LD SP, HL / LD (nn), SP / LD HL, SP+e）
+
+- `LD SP, HL` (`0xF9`)
+  - 動作: `SP ← HL`
+  - フラグ: 変更なし
+  - サイクル: 8
+- `LD (nn), SP` (`0x08`)
+  - フォーマット: `[0x08][low][high]`
+  - 動作:
+    - `addr = readWordAt(PC)`（PC は即値 low を指している）
+    - `PC ← PC + 2`
+    - `[addr] ← SP の下位 8bit`, `[addr+1] ← SP の上位 8bit`
+  - フラグ: 変更なし
+  - サイクル: 20
+- `LD HL, SP+e` (`0xF8`)
+  - フォーマット: `[0xF8][e]`（e は符号付き 8bit オフセット）
+  - 動作:
+    - `pcAfter = PC + 1`（即値を読み飛ばした次の命令アドレス）
+    - `result = SP + signExtend(e)` を計算し、`HL ← result`
+  - フラグ:
+    - `Z = 0`
+    - `N = 0`
+    - `H/C` は **SP の下位 8bit とオフセットの加算結果**に基づいて設定
+  - サイクル: 12
+
+これにより、ブート ROM やスタック初期化コードで多用される「スタックポインタのセットアップ」「SP を基準にした HL の算出」が一通り表現できる。
+
+#### 7.7.3 A とメモリの間の LD（(BC)/(DE)/(nn) 経由）
+
+- `LD A, (BC)` (`0x0A`), `LD A, (DE)` (`0x1A`)
+  - 動作: `A ← [BC]` / `A ← [DE]`
+  - フラグ: 変更なし
+  - サイクル: 8
+- `LD (BC), A` (`0x02`), `LD (DE), A` (`0x12`)
+  - 動作: `[BC] ← A` / `[DE] ← A`
+  - フラグ: 変更なし
+  - サイクル: 8
+- `LD A, (nn)` (`0xFA`)
+  - フォーマット: `[0xFA][low][high]`
+  - 動作:
+    - `addr = readWordAt(PC)`
+    - `PC ← PC + 2`
+    - `A ← [addr]`
+  - サイクル: 16
+- `LD (nn), A` (`0xEA`)
+  - フォーマット: `[0xEA][low][high]`
+  - 動作:
+    - `addr = readWordAt(PC)`
+    - `PC ← PC + 2`
+    - `[addr] ← A`
+  - サイクル: 16
+
+これらは、ポケモン ROM やワーク RAM への単発アクセスを行う際の基本的なロード／ストアとして多用される。
+
+#### 7.7.4 高位 I/O / HRAM への LD（LDH, LD (C),A / LD A,(C)）
+
+Game Boy では I/O レジスタや HRAM が 0xFF00〜0xFFFF に配置されており、  
+専用の短い命令でアクセスできるようになっている。
+
+- `LDH (n), A` (`0xE0`)
+  - 実アドレス: `0xFF00 + n`
+  - フォーマット: `[0xE0][n]`
+  - 動作: `[0xFF00 + n] ← A`
+  - サイクル: 12
+- `LDH A, (n)` (`0xF0`)
+  - 実アドレス: `0xFF00 + n`
+  - フォーマット: `[0xF0][n]`
+  - 動作: `A ← [0xFF00 + n]`
+  - サイクル: 12
+- `LD (C), A` (`0xE2`)
+  - 実アドレス: `0xFF00 + C`
+  - 動作: `[0xFF00 + C] ← A`
+  - サイクル: 8
+- `LD A, (C)` (`0xF2`)
+  - 実アドレス: `0xFF00 + C`
+  - 動作: `A ← [0xFF00 + C]`
+  - サイクル: 8
+
+これらは Joypad 入力、LCD コントローラ、タイマ、割り込みフラグなど、  
+**ポケモン側が頻繁に触る I/O レジスタ**へのアクセスに直結するため、ACE の挙動を読む際にも重要になる。
+
+---
+
 ## 参考資料
 
 - [Game Boy CPU Manual](https://ia803208.us.archive.org/30/items/GameBoyProgManVer1.1/GameBoyProgManVer1.1.pdf)（英語、公式マニュアル）

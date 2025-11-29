@@ -37,6 +37,10 @@ class Cpu(
     private object Cycles {
         const val NOP: Int = 4
         const val LD_R_N: Int = 8
+        const val LD_RR_NN: Int = 12
+        const val LD_SP_HL: Int = 8
+        const val LD_NN_SP: Int = 20
+        const val LD_HL_SP_E: Int = 12
         const val ALU_R: Int = 4
         const val ALU_N: Int = 8
         const val ALU_FROM_HL: Int = 8
@@ -100,6 +104,11 @@ class Cpu(
             0x26 -> executeLdImmediate(::setH) // LD H, n
             0x2E -> executeLdImmediate(::setL) // LD L, n
             0x3E -> executeLdImmediate(::setA) // LD A, n
+            // 16bit 即値ロード
+            0x01 -> executeLd16Immediate { value -> registers.bc = value } // LD BC, nn
+            0x11 -> executeLd16Immediate { value -> registers.de = value } // LD DE, nn
+            0x21 -> executeLd16Immediate { value -> registers.hl = value } // LD HL, nn
+            0x31 -> executeLd16Immediate { value -> registers.sp = value } // LD SP, nn
             // 8bit INC
             0x04 -> executeInc8({ registers.b }, ::setB) // INC B
             0x0C -> executeInc8({ registers.c }, ::setC) // INC C
@@ -242,12 +251,29 @@ class Cpu(
             0x1B -> executeDecDE()
             0x33 -> executeIncSP()
             0x3B -> executeDecSP()
+            // 16bit LD（SP とメモリ）
+            0xF9 -> executeLdSpFromHl() // LD SP, HL
+            0x08 -> executeLdMemoryFromSp() // LD (nn), SP
+            0xF8 -> executeLdHlFromSpPlusImmediate() // LD HL, SP+e
             // HL 自動インクリメント付きロード／ストア
             0x22 -> executeLdHLPlusFromA()
             0x2A -> executeLdAFromHLPlus()
             // HL 経由のメモリアクセス（単発）
             0x7E -> executeLdAFromHL()
             0x77 -> executeLdHLFromA()
+            // A <-> (BC/DE)
+            0x0A -> executeLdAFromIndirect(registers.bc) // LD A, (BC)
+            0x1A -> executeLdAFromIndirect(registers.de) // LD A, (DE)
+            0x02 -> executeLdIndirectFromA(registers.bc) // LD (BC), A
+            0x12 -> executeLdIndirectFromA(registers.de) // LD (DE), A
+            // A <-> (nn)
+            0xFA -> executeLdAFromDirectAddress() // LD A, (nn)
+            0xEA -> executeLdDirectAddressFromA() // LD (nn), A
+            // 高位 I/O / HRAM アクセス
+            0xE0 -> executeLdhFromAWithImmediateOffset() // LDH (n), A
+            0xF0 -> executeLdhAToImmediateOffset() // LDH A, (n)
+            0xE2 -> executeLdhFromAWithCOffset() // LD (C), A
+            0xF2 -> executeLdhAToCOffset() // LD A, (C)
             // レジスタ <-> (HL)
             0x46 -> executeLdRegisterFromHL(::setB) // LD B, (HL)
             0x4E -> executeLdRegisterFromHL(::setC) // LD C, (HL)
@@ -453,6 +479,73 @@ class Cpu(
     }
 
     /**
+     * LD SP, HL 命令: SP ← HL。
+     *
+     * - オペコード: 0xF9
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeLdSpFromHl(): Int {
+        registers.sp = registers.hl
+        return Cycles.LD_SP_HL
+    }
+
+    /**
+     * LD (nn), SP 命令: メモリ [nn] に SP を保存。
+     *
+     * - オペコード: 0x08
+     * - フラグ: 変更なし
+     * - サイクル数: 20
+     */
+    private fun executeLdMemoryFromSp(): Int {
+        val pc = registers.pc
+        val address = readWordAt(pc)
+        registers.pc = (pc.toInt() + 2).toUShort()
+
+        val sp = registers.sp.toInt()
+        val low = (sp and 0xFF).toUByte()
+        val high = ((sp shr 8) and 0xFF).toUByte()
+
+        bus.writeByte(address, low)
+        bus.writeByte((address.toInt() + 1).toUShort(), high)
+
+        return Cycles.LD_NN_SP
+    }
+
+    /**
+     * LD HL, SP+e 命令。
+     *
+     * - オペコード: 0xF8
+     * - サイクル数: 12
+     * - フラグ:
+     *   - Z: 0
+     *   - N: 0
+     *   - H/C: SP の下位 8bit とオフセットの加算結果に基づく
+     */
+    private fun executeLdHlFromSpPlusImmediate(): Int {
+        val pc = registers.pc
+        val offset = bus.readByte(pc)
+        registers.pc = (pc.toInt() + 1).toUShort()
+
+        val sp = registers.sp.toInt()
+        val e = signExtend(offset)
+        val result = sp + e
+
+        // H/C は下位 8bit の加算に対して判定
+        val spLow = sp and 0xFF
+        val eLow = e and 0xFF
+        val sumLow = spLow + eLow
+
+        registers.hl = result.toUShort()
+        registers.flagZ = false
+        registers.flagN = false
+        registers.flagH = (spLow xor eLow xor sumLow) and 0x10 != 0
+        registers.flagC = (spLow xor eLow xor sumLow) and 0x100 != 0
+
+        return Cycles.LD_HL_SP_E
+    }
+
+    /**
      * 8bit 汎用デクリメント共通処理: r ← r - 1。
      *
      * - フラグ:
@@ -498,6 +591,20 @@ class Cpu(
         registers.flagH = (before and 0x0Fu) == 0u.toUByte()
 
         return Cycles.INC_DEC_AT_HL
+    }
+
+    /**
+     * 16bit 汎用即値ロード: rr ← nn。
+     *
+     * - オペコード例: LD BC, nn (0x01), LD DE, nn (0x11) など
+     * - サイクル数: 12
+     */
+    private fun executeLd16Immediate(set: (UShort) -> Unit): Int {
+        val pc = registers.pc
+        val value = readWordAt(pc)
+        registers.pc = (pc.toInt() + 2).toUShort()
+        set(value)
+        return Cycles.LD_RR_NN
     }
 
     private fun checkCondition(cond: Condition): Boolean =
@@ -1033,6 +1140,114 @@ class Cpu(
         val address = registers.hl
         bus.writeByte(address, registers.a)
         return Cycles.LD_HL_FROM_A
+    }
+
+    /**
+     * 汎用 8bit ロード: A ← (rr)。
+     *
+     * - 例: LD A, (BC) / LD A, (DE)
+     * - サイクル数: 8
+     */
+    private fun executeLdAFromIndirect(address: UShort): Int {
+        registers.a = bus.readByte(address)
+        return Cycles.LD_A_FROM_HL
+    }
+
+    /**
+     * 汎用 8bit ロード: (rr) ← A。
+     *
+     * - 例: LD (BC), A / LD (DE), A
+     * - サイクル数: 8
+     */
+    private fun executeLdIndirectFromA(address: UShort): Int {
+        bus.writeByte(address, registers.a)
+        return Cycles.LD_HL_FROM_A
+    }
+
+    /**
+     * LD A, (nn) 命令。
+     *
+     * - オペコード: 0xFA
+     * - サイクル数: 16
+     */
+    private fun executeLdAFromDirectAddress(): Int {
+        val pc = registers.pc
+        val address = readWordAt(pc)
+        registers.pc = (pc.toInt() + 2).toUShort()
+        registers.a = bus.readByte(address)
+        return 16
+    }
+
+    /**
+     * LD (nn), A 命令。
+     *
+     * - オペコード: 0xEA
+     * - サイクル数: 16
+     */
+    private fun executeLdDirectAddressFromA(): Int {
+        val pc = registers.pc
+        val address = readWordAt(pc)
+        registers.pc = (pc.toInt() + 2).toUShort()
+        bus.writeByte(address, registers.a)
+        return 16
+    }
+
+    /**
+     * LDH (n), A 命令。高位 I/O/HRAM への書き込み。
+     *
+     * - 実アドレス: 0xFF00 + n
+     * - オペコード: 0xE0
+     * - サイクル数: 12
+     */
+    private fun executeLdhFromAWithImmediateOffset(): Int {
+        val pc = registers.pc
+        val offset = bus.readByte(pc)
+        registers.pc = (pc.toInt() + 1).toUShort()
+        val address = (0xFF00 + offset.toInt()).toUShort()
+        bus.writeByte(address, registers.a)
+        return 12
+    }
+
+    /**
+     * LDH A, (n) 命令。高位 I/O/HRAM からの読み込み。
+     *
+     * - 実アドレス: 0xFF00 + n
+     * - オペコード: 0xF0
+     * - サイクル数: 12
+     */
+    private fun executeLdhAToImmediateOffset(): Int {
+        val pc = registers.pc
+        val offset = bus.readByte(pc)
+        registers.pc = (pc.toInt() + 1).toUShort()
+        val address = (0xFF00 + offset.toInt()).toUShort()
+        registers.a = bus.readByte(address)
+        return 12
+    }
+
+    /**
+     * LD (C), A 命令。
+     *
+     * - 実アドレス: 0xFF00 + C
+     * - オペコード: 0xE2
+     * - サイクル数: 8
+     */
+    private fun executeLdhFromAWithCOffset(): Int {
+        val address = (0xFF00 + registers.c.toInt()).toUShort()
+        bus.writeByte(address, registers.a)
+        return 8
+    }
+
+    /**
+     * LD A, (C) 命令。
+     *
+     * - 実アドレス: 0xFF00 + C
+     * - オペコード: 0xF2
+     * - サイクル数: 8
+     */
+    private fun executeLdhAToCOffset(): Int {
+        val address = (0xFF00 + registers.c.toInt()).toUShort()
+        registers.a = bus.readByte(address)
+        return 8
     }
 
     /**
