@@ -18,7 +18,8 @@ class SystemBusAndTimerTest {
         val interruptController = InterruptController()
         val timer = Timer(interruptController)
         val vram = UByteArray(0x2000) { 0u }
-        val ppu = Ppu(vram, interruptController)
+        val oam = UByteArray(0xA0) { 0u }
+        val ppu = Ppu(vram, oam, interruptController)
         val bus =
             SystemBus(
                 rom = rom,
@@ -49,7 +50,8 @@ class SystemBusAndTimerTest {
         val interruptController = InterruptController()
         val timer = Timer(interruptController)
         val vram = UByteArray(0x2000) { 0u }
-        val ppu = Ppu(vram, interruptController)
+        val oam = UByteArray(0xA0) { 0u }
+        val ppu = Ppu(vram, oam, interruptController)
         val bus =
             SystemBus(
                 rom = rom,

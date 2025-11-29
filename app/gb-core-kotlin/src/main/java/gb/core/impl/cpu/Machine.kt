@@ -65,6 +65,14 @@ class Machine(
         val ifReg = interruptController.readIf()
         val ieReg = interruptController.readIe()
 
+        // デバッグ: 割り込み処理時のみログ出力
+        if (ifReg != 0u.toUByte()) {
+            android.util.Log.d(
+                "Machine",
+                "handleInterrupts: IF=0x${ifReg.toString(16)}, IE=0x${ieReg.toString(16)}, IME=${cpu.isInterruptsEnabled()}, halted=${cpu.isHalted()}",
+            )
+        }
+
         if (ifReg == 0u.toUByte()) {
             return 0
         }
@@ -73,6 +81,10 @@ class Machine(
         if (cpu.isInterruptsEnabled()) {
             val pending = interruptController.nextPending(true)
             if (pending != null) {
+                android.util.Log.d(
+                    "Machine",
+                    "Servicing interrupt: ${pending.name}, PC before=0x${cpu.registers.pc.toString(16)}",
+                )
                 return cpu.serviceInterrupt(pending)
             }
             // IMEが有効でも、IEレジスタで許可されていない場合は割り込みを処理しない
@@ -83,11 +95,7 @@ class Machine(
         // （IMEが無効でも、またはIEレジスタが無効でも、HALT状態は解除される）
         // 実機では、HALT状態でIMEが無効の場合、HALTバグが発生するが、ここでは簡略化
         if (cpu.isHalted() && ifReg != 0u.toUByte()) {
-            // デバッグ: HALT状態解除時のログ
-            android.util.Log.d(
-                "Machine",
-                "Waking from HALT: IF=0x${ifReg.toString(16)}, IE=0x${ieReg.toString(16)}, IME=${cpu.isInterruptsEnabled()}",
-            )
+            // HALT状態を解除（割り込み待ちが完了）
             cpu.wakeFromHalt()
         }
 
@@ -97,11 +105,13 @@ class Machine(
     init {
         val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
         val vram = UByteArray(0x2000) { 0u }
-        ppu = Ppu(vram, interruptController)
+        val oam = UByteArray(0xA0) { 0u }
+        ppu = Ppu(vram, oam, interruptController)
         bus =
             SystemBus(
                 rom = rom,
                 vram = vram,
+                oam = oam,
                 cartridgeRam = cartridgeRam,
                 interruptController = interruptController,
                 timer = timer,

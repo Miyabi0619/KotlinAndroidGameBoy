@@ -130,13 +130,16 @@ class Cpu(
         val pcBefore = registers.pc
         val opcode = bus.readByte(pcBefore).toInt()
 
-        // デバッグ: 特定のアドレス範囲でログ出力（無限ループ検出用）
-        if (pcBefore.toInt() in 0x0b30..0x0b40) {
+        // デバッグ: 特定のアドレス範囲でログ出力（タイトル画面後の進行確認用）
+        if (pcBefore.toInt() in 0x4000..0x4100) {
             try {
                 Log.d(
                     "CPU",
                     "Executing: PC=0x${pcBefore.toString(16)}, opcode=0x${opcode.toString(16)}, " +
-                        "A=0x${registers.a.toString(16)}, C=0x${registers.c.toString(16)}, " +
+                        "A=0x${registers.a.toString(16)}, B=0x${registers.b.toString(16)}, " +
+                        "C=0x${registers.c.toString(16)}, D=0x${registers.d.toString(16)}, " +
+                        "E=0x${registers.e.toString(16)}, H=0x${registers.h.toString(16)}, " +
+                        "L=0x${registers.l.toString(16)}, SP=0x${registers.sp.toString(16)}, " +
                         "Z=${registers.flagZ}, C=${registers.flagC}, halted=$halted, IME=$interruptMasterEnabled",
                 )
             } catch (_: RuntimeException) {
@@ -197,6 +200,17 @@ class Cpu(
         // HALT 状態は割り込み受付で解除される
         halted = false
         stopped = false
+        
+        // デバッグ: 割り込み処理のログ
+        try {
+            Log.d(
+                "CPU",
+                "serviceInterrupt: type=${type.name}, vector=0x${type.vector.toString(16)}, " +
+                    "PC before=0x${registers.pc.toString(16)}, SP=0x${registers.sp.toString(16)}",
+            )
+        } catch (_: RuntimeException) {
+            // テスト環境では Log がモックされていない可能性があるため、無視
+        }
 
         // 現在の PC を戻りアドレスとしてスタックに退避
         pushWord(registers.pc)
@@ -1020,15 +1034,16 @@ class Cpu(
             val signedOffset = signExtend(offset)
             val newPc = pcAfterImmediate.toInt() + signedOffset
             if (pc.toInt() in 0x0140..0x0200) {
-                try {
-                    Log.d(
-                        "CPU",
-                        "JR ${cond.name} taken: PC=0x${pc.toString(16)}, offset=0x${offset.toString(16)} (signed=$signedOffset), " +
-                            "pcAfterImmediate=0x${pcAfterImmediate.toString(16)}, newPc=0x${newPc.toString(16)}",
-                    )
-                } catch (_: RuntimeException) {
-                    // テスト環境では Log がモックされていない可能性があるため、無視
-                }
+                // デバッグ: コメントアウト（通常動作時は不要）
+                // try {
+                //     Log.d(
+                //         "CPU",
+                //         "JR ${cond.name} taken: PC=0x${pc.toString(16)}, offset=0x${offset.toString(16)} (signed=$signedOffset), " +
+                //             "pcAfterImmediate=0x${pcAfterImmediate.toString(16)}, newPc=0x${newPc.toString(16)}",
+                //     )
+                // } catch (_: RuntimeException) {
+                //     // テスト環境では Log がモックされていない可能性があるため、無視
+                // }
             }
             registers.pc = newPc.toUShort()
             Cycles.JR_COND_TAKEN
@@ -1862,18 +1877,19 @@ class Cpu(
         registers.pc = (pc.toInt() + 1).toUShort()
         val address = (0xFF00 + offset.toInt()).toUShort()
         val value = bus.readByte(address)
-        if (pc.toInt() in 0x0140..0x0200) {
-            try {
-                Log.d(
-                    "CPU",
-                    "LDH A, (n): PC=0x${pc.toString(16)}, offset=0x${offset.toString(16)}, " +
-                        "address=0x${address.toString(16)}, value=0x${value.toString(16)}, " +
-                        "A before=0x${registers.a.toString(16)}",
-                )
-            } catch (_: RuntimeException) {
-                // テスト環境では Log がモックされていない可能性があるため、無視
-            }
-        }
+        // デバッグ: コメントアウト（通常動作時は不要）
+        // if (pc.toInt() in 0x0140..0x0200) {
+        //     try {
+        //         Log.d(
+        //             "CPU",
+        //             "LDH A, (n): PC=0x${pc.toString(16)}, offset=0x${offset.toString(16)}, " +
+        //                 "address=0x${address.toString(16)}, value=0x${value.toString(16)}, " +
+        //                 "A before=0x${registers.a.toString(16)}",
+        //         )
+        //     } catch (_: RuntimeException) {
+        //         // テスト環境では Log がモックされていない可能性があるため、無視
+        //     }
+        // }
         registers.a = value
         return 12
     }

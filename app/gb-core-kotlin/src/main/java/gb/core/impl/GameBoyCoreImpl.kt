@@ -92,6 +92,16 @@ class GameBoyCoreImpl : GameBoyCore {
                 val cycles = m.stepInstruction()
                 accumulatedCycles += cycles
                 instructionCount++
+                
+                // HALT状態の場合、PPUを進めるために追加サイクルを渡す
+                // 実機では、HALT状態でもPPUは動作し続ける
+                // ただし、効率化のため、HALT状態が続く場合は一気にフレーム終了まで進める
+                if (m.cpu.isHalted() && accumulatedCycles < targetCyclesPerFrame) {
+                    val remainingCycles = targetCyclesPerFrame - accumulatedCycles
+                    // 残りのサイクルを一気にPPUに渡す（割り込み待ちのため）
+                    m.ppu.step(remainingCycles)
+                    accumulatedCycles = targetCyclesPerFrame
+                }
 
                 // PCが進んでいるか確認（無限ループ検出）
                 val currentPc = m.cpu.registers.pc
@@ -139,10 +149,14 @@ class GameBoyCoreImpl : GameBoyCore {
             if (frameIndex % 60 == 1L) {
                 // PCの値を確認（CPUが進んでいるか）
                 val pc = m.cpu.registers.pc
+                val ifReg = m.readIf()
+                val ieReg = m.readIe()
                 android.util.Log.d(
                     "GameBoyCore",
                     "Frame $frameIndex: cycles=$accumulatedCycles, instructions=$instructionCount, " +
-                        "PC=0x${pc.toString(16)}, A=0x${m.cpu.registers.a.toString(16)}",
+                        "PC=0x${pc.toString(16)}, A=0x${m.cpu.registers.a.toString(16)}, " +
+                        "IF=0x${ifReg.toString(16)}, IE=0x${ieReg.toString(16)}, " +
+                        "IME=${m.cpu.isInterruptsEnabled()}, halted=${m.cpu.isHalted()}",
                 )
             }
 
