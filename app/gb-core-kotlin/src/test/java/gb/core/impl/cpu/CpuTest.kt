@@ -115,10 +115,66 @@ class CpuTest {
         assertEquals(8, cycles)
         assertEquals(0x1235u.toUShort(), cpu.registers.hl)
         assertEquals(0x0101u.toUShort(), cpu.registers.pc)
-        // 現時点の実装では N だけ 0 にし、その他のフラグは変更しない
+        // 16bit INC はフラグを一切変更しない
         assertEquals(true, cpu.registers.flagZ)
-        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagN)
         assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `INC BC increments 16bit register and keeps flags unchanged`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x03 (INC BC)
+        memory[0x0100] = 0x03u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.bc = 0x0FFFu
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x1000u.toUShort(), cpu.registers.bc)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグはすべて変更されない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `DEC BC decrements 16bit register and keeps flags unchanged`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x0B (DEC BC)
+        memory[0x0100] = 0x0Bu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.bc = 0x1000u
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x0FFFu.toUShort(), cpu.registers.bc)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグはすべて変更されない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
         assertEquals(true, cpu.registers.flagC)
     }
 
@@ -300,6 +356,118 @@ class CpuTest {
         assertEquals(false, cpu.registers.flagN)
         assertEquals(true, cpu.registers.flagH)
         assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `INC DE increments 16bit register and keeps flags unchanged`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x13 (INC DE)
+        memory[0x0100] = 0x13u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.de = 0xABCDu
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = false
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0xABCEu.toUShort(), cpu.registers.de)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグはすべて変更されない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `DEC DE decrements 16bit register and keeps flags unchanged`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x1B (DEC DE)
+        memory[0x0100] = 0x1Bu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.de = 0x0000u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0xFFFFu.toUShort(), cpu.registers.de)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグはすべて変更されない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `INC SP increments 16bit register and keeps flags unchanged`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x33 (INC SP)
+        memory[0x0100] = 0x33u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFF0u
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = true
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0xFFF1u.toUShort(), cpu.registers.sp)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグはすべて変更されない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `DEC SP decrements 16bit register and keeps flags unchanged`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x3B (DEC SP)
+        memory[0x0100] = 0x3Bu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0x0001u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = false
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x0000u.toUShort(), cpu.registers.sp)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグはすべて変更されない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
     }
 
     private class InMemoryBus(

@@ -20,7 +20,8 @@ class Cpu(
         const val NOP: Int = 4
         const val LD_A_N: Int = 8
         const val INC_A: Int = 4
-        const val INC_HL: Int = 8
+        const val INC_16: Int = 8
+        const val DEC_16: Int = 8
         const val LD_R_R: Int = 4
         const val LD_A_FROM_HL: Int = 8
         const val LD_HL_FROM_A: Int = 8
@@ -51,7 +52,13 @@ class Cpu(
             0x00 -> executeNop()
             0x3E -> executeLdAN()
             0x3C -> executeIncA()
+            0x03 -> executeIncBC()
+            0x0B -> executeDecBC()
             0x23 -> executeIncHL()
+            0x13 -> executeIncDE()
+            0x1B -> executeDecDE()
+            0x33 -> executeIncSP()
+            0x3B -> executeDecSP()
             0x7E -> executeLdAFromHL()
             0x77 -> executeLdHLFromA()
             // レジスタ <-> (HL)
@@ -122,26 +129,125 @@ class Cpu(
     }
 
     /**
+     * 16bit 汎用インクリメント共通処理。
+     *
+     * Game Boy の 16bit INC（BC/DE/HL/SP）はフラグを一切変更しない。
+     */
+    private fun executeInc16(
+        get: () -> UShort,
+        set: (UShort) -> Unit,
+    ): Int {
+        val before = get()
+        val result = (before + 1u).toUShort()
+        set(result)
+        return Cycles.INC_16
+    }
+
+    /**
+     * 16bit 汎用デクリメント共通処理。
+     *
+     * Game Boy の 16bit DEC（BC/DE/HL/SP）もフラグを一切変更しない。
+     */
+    private fun executeDec16(
+        get: () -> UShort,
+        set: (UShort) -> Unit,
+    ): Int {
+        val before = get()
+        val result = (before - 1u).toUShort()
+        set(result)
+        return Cycles.DEC_16
+    }
+
+    /**
      * INC HL 命令: HL レジスタを 1 増加させる。
      *
      * - オペコード: 0x23
-     * - フラグ:
-     *   - Z: 変更なし
-     *   - N: 0
-     *   - H/C: 16bit 加算に応じて変化（現時点では簡略化し、後続タスクで精密化する）
+     * - フラグ: 変更なし
      * - サイクル数: 8
      */
-    private fun executeIncHL(): Int {
-        val before = registers.hl
-        val result = (before + 1u).toUShort()
+    private fun executeIncHL(): Int =
+        executeInc16(
+            get = { registers.hl },
+            set = { registers.hl = it },
+        )
 
-        registers.hl = result
+    /**
+     * INC BC 命令: BC レジスタを 1 増加させる。
+     *
+     * - オペコード: 0x03
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeIncBC(): Int =
+        executeInc16(
+            get = { registers.bc },
+            set = { registers.bc = it },
+        )
 
-        // 簡易版フラグ更新: N は 0、Z/H/C は今は変更しない（仕様詰めは後続タスク）。
-        registers.flagN = false
+    /**
+     * DEC BC 命令: BC レジスタを 1 減少させる。
+     *
+     * - オペコード: 0x0B
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeDecBC(): Int =
+        executeDec16(
+            get = { registers.bc },
+            set = { registers.bc = it },
+        )
 
-        return Cycles.INC_HL
-    }
+    /**
+     * INC DE 命令: DE レジスタを 1 増加させる。
+     *
+     * - オペコード: 0x13
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeIncDE(): Int =
+        executeInc16(
+            get = { registers.de },
+            set = { registers.de = it },
+        )
+
+    /**
+     * DEC DE 命令: DE レジスタを 1 減少させる。
+     *
+     * - オペコード: 0x1B
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeDecDE(): Int =
+        executeDec16(
+            get = { registers.de },
+            set = { registers.de = it },
+        )
+
+    /**
+     * INC SP 命令: SP レジスタを 1 増加させる。
+     *
+     * - オペコード: 0x33
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeIncSP(): Int =
+        executeInc16(
+            get = { registers.sp },
+            set = { registers.sp = it },
+        )
+
+    /**
+     * DEC SP 命令: SP レジスタを 1 減少させる。
+     *
+     * - オペコード: 0x3B
+     * - フラグ: 変更なし
+     * - サイクル数: 8
+     */
+    private fun executeDecSP(): Int =
+        executeDec16(
+            get = { registers.sp },
+            set = { registers.sp = it },
+        )
 
     /**
      * LD A, (HL) 命令: A ← [HL]。
