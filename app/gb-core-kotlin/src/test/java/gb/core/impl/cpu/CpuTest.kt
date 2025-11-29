@@ -1172,6 +1172,136 @@ class CpuTest {
         assertEquals(0x0102u.toUShort(), cpu.registers.pc)
     }
 
+    @Test
+    fun `CALL nn pushes return address and jumps`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: CD 34 12  (CALL 0x1234)
+        memory[0x0100] = 0xCDu
+        memory[0x0101] = 0x34u
+        memory[0x0102] = 0x12u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFFEu
+
+        val cycles = cpu.executeInstruction()
+
+        // CALL は 24 cycles
+        assertEquals(24, cycles)
+        // PC は 0x1234 へ
+        assertEquals(0x1234u.toUShort(), cpu.registers.pc)
+        // 戻りアドレス 0x0103 がスタックに積まれ、SP が 2 減少していることだけ確認
+        assertEquals(0xFFFCu.toUShort(), cpu.registers.sp)
+    }
+
+    @Test
+    fun `CALL NZ nn only pushes and jumps when Z is false`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: C4 78 56  (CALL NZ, 0x5678)
+        memory[0x0100] = 0xC4u
+        memory[0x0101] = 0x78u
+        memory[0x0102] = 0x56u
+
+        val cpu = Cpu(bus)
+        cpu.registers.sp = 0xFFFEu
+
+        // Z=false → CALL 実行
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = false
+        var cycles = cpu.executeInstruction()
+        assertEquals(24, cycles)
+        assertEquals(0x5678u.toUShort(), cpu.registers.pc)
+        assertEquals(0xFFFCu.toUShort(), cpu.registers.sp)
+
+        // Z=true → 何もせず即値を読み飛ばすだけ
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = true
+        cpu.registers.sp = 0xFFFEu
+        cycles = cpu.executeInstruction()
+        assertEquals(12, cycles)
+        assertEquals(0x0103u.toUShort(), cpu.registers.pc)
+        // SP とスタック内容は不変（未使用）
+        assertEquals(0xFFFEu.toUShort(), cpu.registers.sp)
+    }
+
+    @Test
+    fun `RET pops address from stack`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: C9 (RET)
+        memory[0x0100] = 0xC9u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        // スタックに 0x1234 が積まれているとする（CALL 後など）
+        cpu.registers.sp = 0xFFFCu
+        bus.writeByte(0xFFFCu, 0x34u) // low
+        bus.writeByte(0xFFFDU, 0x12u) // high
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(16, cycles)
+        assertEquals(0x1234u.toUShort(), cpu.registers.pc)
+        assertEquals(0xFFFEu.toUShort(), cpu.registers.sp)
+    }
+
+    @Test
+    fun `RET NZ only pops when Z is false`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: C0 (RET NZ)
+        memory[0x0100] = 0xC0u
+
+        val cpu = Cpu(bus)
+
+        // Z=false → RET 実行
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = false
+        cpu.registers.sp = 0xFFFCu
+        bus.writeByte(0xFFFCu, 0x78u)
+        bus.writeByte(0xFFFDU, 0x56u)
+        var cycles = cpu.executeInstruction()
+        assertEquals(20, cycles)
+        assertEquals(0x5678u.toUShort(), cpu.registers.pc)
+        assertEquals(0xFFFEu.toUShort(), cpu.registers.sp)
+
+        // Z=true → 何もしない
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.flagZ = true
+        cpu.registers.sp = 0xFFFCu
+        cycles = cpu.executeInstruction()
+        assertEquals(8, cycles)
+        assertEquals(0xFFFCu.toUShort(), cpu.registers.sp)
+    }
+
+    @Test
+    fun `RST 38h pushes return address and jumps to vector`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: FF (RST 38H)
+        memory[0x0100] = 0xFFu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFFEu
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(16, cycles)
+        // PC は 0x0038 へ
+        assertEquals(0x0038u.toUShort(), cpu.registers.pc)
+        // 戻りアドレス 0x0101 がスタックに積まれ、SP が 2 減少していることだけ確認
+        assertEquals(0xFFFCu.toUShort(), cpu.registers.sp)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

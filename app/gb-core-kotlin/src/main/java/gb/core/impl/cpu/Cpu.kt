@@ -46,6 +46,13 @@ class Cpu(
         const val JR: Int = 12
         const val JR_COND_TAKEN: Int = 12
         const val JR_COND_NOT_TAKEN: Int = 8
+        const val CALL: Int = 24
+        const val CALL_COND_TAKEN: Int = 24
+        const val CALL_COND_NOT_TAKEN: Int = 12
+        const val RET: Int = 16
+        const val RET_COND_TAKEN: Int = 20
+        const val RET_COND_NOT_TAKEN: Int = 8
+        const val RST: Int = 16
         const val INC_R: Int = 4
         const val DEC_R: Int = 4
         const val INC_16: Int = 8
@@ -195,6 +202,27 @@ class Cpu(
             0x28 -> executeJrConditional(Condition.Z) // JR Z, e
             0x30 -> executeJrConditional(Condition.NC) // JR NC, e
             0x38 -> executeJrConditional(Condition.C) // JR C, e
+            // CALL nn / CALL cc, nn
+            0xCD -> executeCallUnconditional() // CALL nn
+            0xC4 -> executeCallConditional(Condition.NZ) // CALL NZ, nn
+            0xCC -> executeCallConditional(Condition.Z) // CALL Z, nn
+            0xD4 -> executeCallConditional(Condition.NC) // CALL NC, nn
+            0xDC -> executeCallConditional(Condition.C) // CALL C, nn
+            // RET / RET cc
+            0xC9 -> executeRetUnconditional() // RET
+            0xC0 -> executeRetConditional(Condition.NZ) // RET NZ
+            0xC8 -> executeRetConditional(Condition.Z) // RET Z
+            0xD0 -> executeRetConditional(Condition.NC) // RET NC
+            0xD8 -> executeRetConditional(Condition.C) // RET C
+            // RST
+            0xC7 -> executeRst(0x00u) // RST 00H
+            0xCF -> executeRst(0x08u) // RST 08H
+            0xD7 -> executeRst(0x10u) // RST 10H
+            0xDF -> executeRst(0x18u) // RST 18H
+            0xE7 -> executeRst(0x20u) // RST 20H
+            0xEF -> executeRst(0x28u) // RST 28H
+            0xF7 -> executeRst(0x30u) // RST 30H
+            0xFF -> executeRst(0x38u) // RST 38H
             // 16bit INC/DEC
             0x03 -> executeIncBC()
             0x0B -> executeDecBC()
@@ -697,14 +725,128 @@ class Cpu(
         val offset = bus.readByte(pc)
         // 即値 1 バイト分を読み飛ばす
         val pcAfterImmediate = (pc.toInt() + 1).toUShort()
-        registers.pc = pcAfterImmediate
+
         return if (checkCondition(cond)) {
+            // 条件成立時のみ、次の命令アドレスを基準にオフセットを適用
             val newPc = pcAfterImmediate.toInt() + signExtend(offset)
             registers.pc = newPc.toUShort()
             Cycles.JR_COND_TAKEN
         } else {
+            // 条件不成立時は単に即値を読み飛ばすだけ
+            registers.pc = pcAfterImmediate
             Cycles.JR_COND_NOT_TAKEN
         }
+    }
+
+    /**
+     * スタックに 16bit 値を PUSH する共通処理。
+     *
+     * - Game Boy のスタックは高アドレスから低アドレスへ伸びる。
+     * - 仕様通り、[SP-1] に上位バイト, [SP-2] に下位バイトを書き、SP を 2 減少させる。
+     */
+    private fun pushWord(value: UShort) {
+        val spBefore = registers.sp.toInt()
+        val high = ((value.toInt() shr 8) and 0xFF).toUByte()
+        val low = (value.toInt() and 0xFF).toUByte()
+
+        val spHigh = (spBefore - 1).toUShort()
+        val spLow = (spBefore - 2).toUShort()
+
+        bus.writeByte(spHigh, high)
+        bus.writeByte(spLow, low)
+
+        registers.sp = spLow
+    }
+
+    /**
+     * スタックから 16bit 値を POP する共通処理。
+     *
+     * - [SP] = low, [SP+1] = high を読み、SP を 2 増加させる。
+     */
+    private fun popWord(): UShort {
+        val sp = registers.sp.toInt()
+        val low = bus.readByte(sp.toUShort()).toInt()
+        val high = bus.readByte((sp + 1).toUShort()).toInt()
+        registers.sp = (sp + 2).toUShort()
+        return ((high shl 8) or low).toUShort()
+    }
+
+    /**
+     * CALL nn（無条件呼び出し）。
+     *
+     * - オペコード: 0xCD
+     * - フォーマット: [0xCD][low][high]
+     * - 動作: 次の命令アドレスをスタックに積み、PC を nn へ変更
+     */
+    private fun executeCallUnconditional(): Int {
+        val pcImmediate = registers.pc
+        val target = readWordAt(pcImmediate)
+        val returnAddress = (pcImmediate.toInt() + 2).toUShort()
+
+        pushWord(returnAddress)
+        registers.pc = target
+
+        return Cycles.CALL
+    }
+
+    /**
+     * CALL cc, nn（条件付き呼び出し）。
+     *
+     * - 条件成立: CALL と同様に push + PC=nn（24 cycles）
+     * - 条件不成立: 即値を読み飛ばしのみ（12 cycles）
+     */
+    private fun executeCallConditional(cond: Condition): Int {
+        val pcImmediate = registers.pc
+        val target = readWordAt(pcImmediate)
+        val pcAfterImmediate = (pcImmediate.toInt() + 2).toUShort()
+
+        return if (checkCondition(cond)) {
+            val returnAddress = pcAfterImmediate
+            pushWord(returnAddress)
+            registers.pc = target
+            Cycles.CALL_COND_TAKEN
+        } else {
+            registers.pc = pcAfterImmediate
+            Cycles.CALL_COND_NOT_TAKEN
+        }
+    }
+
+    /**
+     * RET（無条件リターン）。
+     *
+     * - オペコード: 0xC9
+     * - 動作: スタックからアドレスを POP して PC へ設定
+     */
+    private fun executeRetUnconditional(): Int {
+        registers.pc = popWord()
+        return Cycles.RET
+    }
+
+    /**
+     * RET cc（条件付きリターン）。
+     *
+     * - 条件成立: POP して PC へ設定（20 cycles）
+     * - 条件不成立: 何もせず（8 cycles）
+     */
+    private fun executeRetConditional(cond: Condition): Int =
+        if (checkCondition(cond)) {
+            registers.pc = popWord()
+            Cycles.RET_COND_TAKEN
+        } else {
+            Cycles.RET_COND_NOT_TAKEN
+        }
+
+    /**
+     * RST n（リスタート）。
+     *
+     * - 対応アドレス: 0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38
+     * - 動作: 次の命令アドレスを PUSH して、PC を固定アドレスへ変更
+     */
+    private fun executeRst(vector: UByte): Int {
+        val returnAddress = registers.pc
+        pushWord(returnAddress)
+        registers.pc = vector.toUShort()
+        return Cycles.RST
     }
 
     /**
