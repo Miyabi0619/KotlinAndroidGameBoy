@@ -134,6 +134,38 @@ class Cpu(
         return executeByOpcode(opcode, pcBefore)
     }
 
+    /**
+     * 現在 IME（割り込みマスタフラグ）が有効かどうかを返す。
+     *
+     * - Machine や将来の「本体」クラスが割り込み受付可否を判断するために使用する。
+     */
+    fun isInterruptsEnabled(): Boolean = interruptMasterEnabled
+
+    /**
+     * 割り込みサービスルーチンを開始する。
+     *
+     * - 割り込みベクタに PC を飛ばす前に、現在の PC をスタックに退避し、IME を 0 にする。
+     * - HALT 中であれば HALT 状態も解除する。
+     * - サイクル数: 20（CALL nn と同等）
+     */
+    fun serviceInterrupt(type: InterruptController.Type): Int {
+        // HALT 状態は割り込み受付で解除される
+        halted = false
+        stopped = false
+
+        // 現在の PC を戻りアドレスとしてスタックに退避
+        pushWord(registers.pc)
+
+        // 割り込みハンドラ中は IME をクリア
+        interruptMasterEnabled = false
+
+        // 割り込みベクタへジャンプ
+        registers.pc = type.vector
+
+        // 実機どおり 20 サイクルを返す
+        return 20
+    }
+
     private fun executeByOpcode(
         opcode: Int,
         pcBefore: UShort,

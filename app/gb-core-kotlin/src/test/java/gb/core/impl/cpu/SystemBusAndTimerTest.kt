@@ -51,6 +51,9 @@ class SystemBusAndTimerTest {
                 timer = timer,
             )
 
+        // IE: すべての割り込みを許可
+        interruptController.writeIe(0xFFu)
+
         // TAC: タイマ有効 + クロック選択 0 (CPU/1024)
         bus.writeByte(0xFF07u, 0b100u)
 
