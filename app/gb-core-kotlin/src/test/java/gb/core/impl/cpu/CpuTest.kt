@@ -874,6 +874,81 @@ class CpuTest {
         assertEquals(true, cpu.registers.flagC)
     }
 
+    @Test
+    fun `ADD A B adds registers and sets flags correctly`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x80 (ADD A, B)
+        memory[0x0100] = 0x80u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x0Fu
+        cpu.registers.b = 0x01u
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0x10u.toUByte(), cpu.registers.a)
+        // 0x0F + 0x01 -> H=1, Z=0, C=0
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `ADD A n adds immediate and can set carry and zero`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0xC6 (ADD A, n), 0x0101: 0x01
+        memory[0x0100] = 0xC6u
+        memory[0x0101] = 0x01u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0xFFu
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x00u.toUByte(), cpu.registers.a)
+        // 0xFF + 0x01 -> 0x00, Z=1, H=1, C=1
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `ADD A HL adds value from memory`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x86 (ADD A, (HL))
+        memory[0x0100] = 0x86u
+        memory[0xC000] = 0x20u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+        cpu.registers.a = 0x10u
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x30u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

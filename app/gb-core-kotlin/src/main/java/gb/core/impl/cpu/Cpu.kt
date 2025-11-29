@@ -12,14 +12,20 @@ package gb.core.impl.cpu
 class Cpu(
     private val bus: Bus,
 ) {
+    private enum class AluOp {
+        ADD,
+    }
+
     /**
      * 1 命令あたりのサイクル数を表す定数群。
      * 今後命令が増えた場合もここに追加していく。
      */
     private object Cycles {
         const val NOP: Int = 4
-        const val LD_A_N: Int = 8
         const val LD_R_N: Int = 8
+        const val ALU_R: Int = 4
+        const val ALU_N: Int = 8
+        const val ALU_FROM_HL: Int = 8
         const val INC_R: Int = 4
         const val DEC_R: Int = 4
         const val INC_16: Int = 8
@@ -83,6 +89,16 @@ class Cpu(
             0x2D -> executeDec8({ registers.l }, ::setL) // DEC L
             0x3D -> executeDec8({ registers.a }, ::setA) // DEC A
             0x35 -> executeDecAtHL() // DEC (HL)
+            // 8bit 算術（現時点では ADD A, r/n/(HL) のみ）
+            0x80 -> executeAlu(AluOp.ADD, registers.b) // ADD A, B
+            0x81 -> executeAlu(AluOp.ADD, registers.c) // ADD A, C
+            0x82 -> executeAlu(AluOp.ADD, registers.d) // ADD A, D
+            0x83 -> executeAlu(AluOp.ADD, registers.e) // ADD A, E
+            0x84 -> executeAlu(AluOp.ADD, registers.h) // ADD A, H
+            0x85 -> executeAlu(AluOp.ADD, registers.l) // ADD A, L
+            0x87 -> executeAlu(AluOp.ADD, registers.a) // ADD A, A
+            0x86 -> executeAluFromHL(AluOp.ADD) // ADD A, (HL)
+            0xC6 -> executeAluImmediate(AluOp.ADD) // ADD A, n
             // 16bit INC/DEC
             0x03 -> executeIncBC()
             0x0B -> executeDecBC()
@@ -347,6 +363,75 @@ class Cpu(
         registers.flagH = (before and 0x0Fu) == 0u.toUByte()
 
         return Cycles.INC_DEC_AT_HL
+    }
+
+    /**
+     * A とオペランドを用いた 8bit 算術（現時点では ADD のみ）のコア処理。
+     *
+     * - この関数は A とフラグを更新するだけで、PC・サイクル数は呼び出し元で扱う。
+     */
+    private fun applyAlu(
+        op: AluOp,
+        operand: UByte,
+    ) {
+        val a = registers.a
+        when (op) {
+            AluOp.ADD -> {
+                val aInt = a.toInt()
+                val bInt = operand.toInt()
+                val sum = aInt + bInt
+                val result = sum and 0xFF
+
+                registers.a = result.toUByte()
+                registers.flagZ = result == 0
+                registers.flagN = false
+                registers.flagH = (aInt and 0x0F) + (bInt and 0x0F) > 0x0F
+                registers.flagC = sum > 0xFF
+            }
+        }
+    }
+
+    /**
+     * A, r 形式の ALU 命令（レジスタ版）。
+     *
+     * - 例: ADD A, B (`0x80`)
+     * - サイクル数: 4
+     */
+    private fun executeAlu(
+        op: AluOp,
+        operand: UByte,
+    ): Int {
+        applyAlu(op, operand)
+        return Cycles.ALU_R
+    }
+
+    /**
+     * A, n 形式の ALU 命令（即値版）。
+     *
+     * - 例: ADD A, n (`0xC6`)
+     * - サイクル数: 8
+     */
+    private fun executeAluImmediate(op: AluOp): Int {
+        val pc = registers.pc
+        val value = bus.readByte(pc)
+        registers.pc = (pc.toInt() + 1).toUShort()
+
+        applyAlu(op, value)
+
+        return Cycles.ALU_N
+    }
+
+    /**
+     * A, (HL) 形式の ALU 命令。
+     *
+     * - 例: ADD A, (HL) (`0x86`)
+     * - サイクル数: 8
+     */
+    private fun executeAluFromHL(op: AluOp): Int {
+        val address = registers.hl
+        val value = bus.readByte(address)
+        applyAlu(op, value)
+        return Cycles.ALU_FROM_HL
     }
 
     /**
