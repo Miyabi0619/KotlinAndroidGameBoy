@@ -21,6 +21,8 @@ class Cpu(
         const val LD_A_N: Int = 8
         const val INC_A: Int = 4
         const val LD_R_R: Int = 4
+        const val LD_A_FROM_HL: Int = 8
+        const val LD_HL_FROM_A: Int = 8
     }
 
     val registers = Registers()
@@ -46,6 +48,8 @@ class Cpu(
             0x00 -> executeNop()
             0x3E -> executeLdAN()
             0x3C -> executeIncA()
+            0x7E -> executeLdAFromHL()
+            0x77 -> executeLdHLFromA()
             // レジスタ間コピー（A <-> その他）
             0x47 -> executeLdRegister(::setB, registers.a) // LD B, A
             0x4F -> executeLdRegister(::setC, registers.a) // LD C, A
@@ -108,6 +112,33 @@ class Cpu(
         // flagC は変更しない
 
         return Cycles.INC_A
+    }
+
+    /**
+     * LD A, (HL) 命令: A ← [HL]。
+     *
+     * - オペコード: 0x7E
+     * - フラグ: 変化なし
+     * - サイクル数: 8
+     */
+    private fun executeLdAFromHL(): Int {
+        val address = registers.hl
+        val value = bus.readByte(address)
+        registers.a = value
+        return Cycles.LD_A_FROM_HL
+    }
+
+    /**
+     * LD (HL), A 命令: [HL] ← A。
+     *
+     * - オペコード: 0x77
+     * - フラグ: 変化なし
+     * - サイクル数: 8
+     */
+    private fun executeLdHLFromA(): Int {
+        val address = registers.hl
+        bus.writeByte(address, registers.a)
+        return Cycles.LD_HL_FROM_A
     }
 
     /**

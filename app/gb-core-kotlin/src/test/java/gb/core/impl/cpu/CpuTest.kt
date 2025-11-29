@@ -154,6 +154,67 @@ class CpuTest {
         assertEquals(false, cpu.registers.flagC)
     }
 
+    @Test
+    fun `LD A (HL) loads from memory at HL`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x7E (LD A, (HL))
+        memory[0x0100] = 0x7Eu
+
+        // メモリ[0xC000] に 0x99 を入れておく
+        memory[0xC000] = 0x99u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+        cpu.registers.a = 0x00u
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+        cpu.registers.flagH = false
+        cpu.registers.flagC = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x99u.toUByte(), cpu.registers.a)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `LD (HL) A stores A into memory at HL`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x77 (LD (HL), A)
+        memory[0x0100] = 0x77u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+        cpu.registers.a = 0x55u
+        cpu.registers.flagZ = false
+        cpu.registers.flagN = false
+        cpu.registers.flagH = true
+        cpu.registers.flagC = false
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(8, cycles)
+        assertEquals(0x55u.toUByte(), memory[0xC000])
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+        // フラグは変化しない
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {
