@@ -6,8 +6,8 @@ package gb.core.impl.cpu
  * - [registers]: レジスタとフラグの状態
  * - [bus]: メモリアクセス用インターフェース
  *
- * 現時点では NOP 命令 (`0x00`) のみをサポートし、それ以外のオペコードは例外を投げる。
- * 後続タスクで命令セットを段階的に拡張していく。
+ * 現時点では NOP / LD A, n / INC A のみをサポートし、
+ * それ以外のオペコードは例外を投げる。後続タスクで命令セットを段階的に拡張していく。
  */
 class Cpu(
     private val bus: Bus,
@@ -19,6 +19,7 @@ class Cpu(
     private object Cycles {
         const val NOP: Int = 4
         const val LD_A_N: Int = 8
+        const val INC_A: Int = 4
     }
 
     val registers = Registers()
@@ -36,6 +37,7 @@ class Cpu(
         return when (opcode) {
             0x00 -> executeNop()
             0x3E -> executeLdAN()
+            0x3C -> executeIncA()
             else -> error("Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}")
         }
     }
@@ -59,5 +61,31 @@ class Cpu(
         // 即値 1 バイト分 PC を進める
         registers.pc = (pc.toInt() + 1).toUShort()
         return Cycles.LD_A_N
+    }
+
+    /**
+     * INC A 命令: A レジスタを 1 増加させる。
+     *
+     * - オペコード: 0x3C
+     * - フラグ:
+     *   - Z: 結果が 0 のとき 1、それ以外は 0
+     *   - N: 必ず 0（加算なので）
+     *   - H: 下位 4bit に桁上がりがあった場合 1（0x0F -> 0x10 など）
+     *   - C: 変化しない
+     * - サイクル数: 4
+     */
+    private fun executeIncA(): Int {
+        val before = registers.a
+        val result = (before + 1u).toUByte()
+
+        registers.a = result
+
+        // フラグ更新
+        registers.flagZ = result == 0u.toUByte()
+        registers.flagN = false
+        registers.flagH = (before and 0x0Fu) == 0x0Fu.toUByte()
+        // flagC は変更しない
+
+        return Cycles.INC_A
     }
 }

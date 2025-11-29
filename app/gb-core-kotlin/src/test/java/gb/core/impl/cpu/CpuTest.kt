@@ -42,6 +42,58 @@ class CpuTest {
         assertEquals(0x0102u.toUShort(), cpu.registers.pc)
     }
 
+    @Test
+    fun `INC A increments value and updates flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x3C (INC A)
+        memory[0x0100] = 0x3Cu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x01u.toUByte()
+        cpu.registers.flagC = true // C は変化しないことを確認したいので事前に 1 にしておく
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(4, cycles)
+        assertEquals(0x02u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `INC A sets half-carry and zero when expected`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x3C (INC A)
+        memory[0x0100] = 0x3Cu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        // 0x0F -> 0x10 で H が立つが Z は立たない
+        cpu.registers.a = 0x0Fu
+        cpu.executeInstruction()
+        assertEquals(0x10u.toUByte(), cpu.registers.a)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagH)
+
+        // もう一度同じ命令を実行するために PC を戻す
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        // 0xFF -> 0x00 で Z と H が立つ
+        cpu.registers.a = 0xFFu
+        cpu.executeInstruction()
+        assertEquals(0x00u.toUByte(), cpu.registers.a)
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagH)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {
