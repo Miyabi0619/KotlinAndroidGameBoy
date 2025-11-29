@@ -195,6 +195,121 @@ class CpuTest {
     }
 
     @Test
+    fun `INC B updates value and flags like INC A`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x04 (INC B)
+        memory[0x0100] = 0x04u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.b = 0x0Fu
+        cpu.registers.flagC = true
+
+        val cycles1 = cpu.executeInstruction()
+
+        // 0x0F -> 0x10 で H=1, Z=0, Cは維持
+        assertEquals(4, cycles1)
+        assertEquals(0x10u.toUByte(), cpu.registers.b)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+
+        // 0xFF -> 0x00 のとき Z=1, H=1
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.b = 0xFFu
+        val cycles2 = cpu.executeInstruction()
+
+        assertEquals(4, cycles2)
+        assertEquals(0x00u.toUByte(), cpu.registers.b)
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `DEC E updates value and flags correctly`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x1D (DEC E)
+        memory[0x0100] = 0x1Du
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.e = 0x10u
+        cpu.registers.flagC = false
+
+        val cycles1 = cpu.executeInstruction()
+
+        // 0x10 -> 0x0F で H=1, N=1, Z=0
+        assertEquals(4, cycles1)
+        assertEquals(0x0Fu.toUByte(), cpu.registers.e)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+
+        // 0x01 -> 0x00 で Z=1, H=0
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.e = 0x01u
+        val cycles2 = cpu.executeInstruction()
+
+        assertEquals(4, cycles2)
+        assertEquals(0x00u.toUByte(), cpu.registers.e)
+        assertEquals(true, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(false, cpu.registers.flagH)
+    }
+
+    @Test
+    fun `INC HL memory increments value and uses 12 cycles`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x34 (INC (HL))
+        memory[0x0100] = 0x34u
+        memory[0xC000] = 0x0Fu
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(12, cycles)
+        assertEquals(0x10u.toUByte(), memory[0xC000])
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+    }
+
+    @Test
+    fun `DEC HL memory decrements value and uses 12 cycles`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 0x35 (DEC (HL))
+        memory[0x0100] = 0x35u
+        memory[0xC000] = 0x10u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.hl = 0xC000u
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(12, cycles)
+        assertEquals(0x0Fu.toUByte(), memory[0xC000])
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(true, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+    }
+
+    @Test
     fun `INC HL increments 16bit register and takes 8 cycles`() {
         val memory = UByteArray(MEMORY_SIZE) { 0x00u }
         val bus = InMemoryBus(memory)

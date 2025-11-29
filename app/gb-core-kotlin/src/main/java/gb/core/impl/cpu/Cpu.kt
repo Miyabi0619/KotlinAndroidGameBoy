@@ -20,7 +20,8 @@ class Cpu(
         const val NOP: Int = 4
         const val LD_A_N: Int = 8
         const val LD_R_N: Int = 8
-        const val INC_A: Int = 4
+        const val INC_R: Int = 4
+        const val DEC_R: Int = 4
         const val INC_16: Int = 8
         const val DEC_16: Int = 8
         const val LD_R_R: Int = 4
@@ -30,6 +31,7 @@ class Cpu(
         const val LD_HL_FROM_A_INC: Int = 8
         const val LD_R_FROM_HL: Int = 8
         const val LD_HL_FROM_R: Int = 8
+        const val INC_DEC_AT_HL: Int = 12
         const val BIT_R: Int = 8
     }
 
@@ -63,7 +65,24 @@ class Cpu(
             0x26 -> executeLdImmediate(::setH) // LD H, n
             0x2E -> executeLdImmediate(::setL) // LD L, n
             0x3E -> executeLdImmediate(::setA) // LD A, n
-            0x3C -> executeIncA()
+            // 8bit INC
+            0x04 -> executeInc8({ registers.b }, ::setB) // INC B
+            0x0C -> executeInc8({ registers.c }, ::setC) // INC C
+            0x14 -> executeInc8({ registers.d }, ::setD) // INC D
+            0x1C -> executeInc8({ registers.e }, ::setE) // INC E
+            0x24 -> executeInc8({ registers.h }, ::setH) // INC H
+            0x2C -> executeInc8({ registers.l }, ::setL) // INC L
+            0x3C -> executeInc8({ registers.a }, ::setA) // INC A
+            0x34 -> executeIncAtHL() // INC (HL)
+            // 8bit DEC
+            0x05 -> executeDec8({ registers.b }, ::setB) // DEC B
+            0x0D -> executeDec8({ registers.c }, ::setC) // DEC C
+            0x15 -> executeDec8({ registers.d }, ::setD) // DEC D
+            0x1D -> executeDec8({ registers.e }, ::setE) // DEC E
+            0x25 -> executeDec8({ registers.h }, ::setH) // DEC H
+            0x2D -> executeDec8({ registers.l }, ::setL) // DEC L
+            0x3D -> executeDec8({ registers.a }, ::setA) // DEC A
+            0x35 -> executeDecAtHL() // DEC (HL)
             // 16bit INC/DEC
             0x03 -> executeIncBC()
             0x0B -> executeDecBC()
@@ -206,29 +225,50 @@ class Cpu(
     }
 
     /**
-     * INC A 命令: A レジスタを 1 増加させる。
+     * 8bit 汎用インクリメント共通処理: r ← r + 1。
      *
-     * - オペコード: 0x3C
      * - フラグ:
-     *   - Z: 結果が 0 のとき 1、それ以外は 0
-     *   - N: 必ず 0（加算なので）
+     *   - Z: 結果が 0 のとき 1
+     *   - N: 0
      *   - H: 下位 4bit に桁上がりがあった場合 1（0x0F -> 0x10 など）
      *   - C: 変化しない
-     * - サイクル数: 4
+     * - サイクル数:
+     *   - レジスタ: 4
      */
-    private fun executeIncA(): Int {
-        val before = registers.a
+    private fun executeInc8(
+        get: () -> UByte,
+        set: (UByte) -> Unit,
+    ): Int {
+        val before = get()
         val result = (before + 1u).toUByte()
 
-        registers.a = result
+        set(result)
 
-        // フラグ更新
         registers.flagZ = result == 0u.toUByte()
         registers.flagN = false
         registers.flagH = (before and 0x0Fu) == 0x0Fu.toUByte()
-        // flagC は変更しない
 
-        return Cycles.INC_A
+        return Cycles.INC_R
+    }
+
+    /**
+     * INC (HL) 命令専用: [HL] ← [HL] + 1。
+     *
+     * - フラグは [executeInc8] と同じ。
+     * - サイクル数: 12
+     */
+    private fun executeIncAtHL(): Int {
+        val address = registers.hl
+        val before = bus.readByte(address)
+        val result = (before + 1u).toUByte()
+
+        bus.writeByte(address, result)
+
+        registers.flagZ = result == 0u.toUByte()
+        registers.flagN = false
+        registers.flagH = (before and 0x0Fu) == 0x0Fu.toUByte()
+
+        return Cycles.INC_DEC_AT_HL
     }
 
     /**
@@ -259,6 +299,54 @@ class Cpu(
         val result = (before - 1u).toUShort()
         set(result)
         return Cycles.DEC_16
+    }
+
+    /**
+     * 8bit 汎用デクリメント共通処理: r ← r - 1。
+     *
+     * - フラグ:
+     *   - Z: 結果が 0 のとき 1
+     *   - N: 1
+     *   - H: 下位 4bit で借りが発生した場合 1（0x10 -> 0x0F など）
+     *   - C: 変化しない
+     * - サイクル数:
+     *   - レジスタ: 4
+     */
+    private fun executeDec8(
+        get: () -> UByte,
+        set: (UByte) -> Unit,
+    ): Int {
+        val before = get()
+        val result = (before - 1u).toUByte()
+
+        set(result)
+
+        registers.flagZ = result == 0u.toUByte()
+        registers.flagN = true
+        // 下位 4bit が 0 から借りるときに H=1
+        registers.flagH = (before and 0x0Fu) == 0u.toUByte()
+
+        return Cycles.DEC_R
+    }
+
+    /**
+     * DEC (HL) 命令専用: [HL] ← [HL] - 1。
+     *
+     * - フラグは [executeDec8] と同じ。
+     * - サイクル数: 12
+     */
+    private fun executeDecAtHL(): Int {
+        val address = registers.hl
+        val before = bus.readByte(address)
+        val result = (before - 1u).toUByte()
+
+        bus.writeByte(address, result)
+
+        registers.flagZ = result == 0u.toUByte()
+        registers.flagN = true
+        registers.flagH = (before and 0x0Fu) == 0u.toUByte()
+
+        return Cycles.INC_DEC_AT_HL
     }
 
     /**
