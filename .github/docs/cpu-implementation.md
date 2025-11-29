@@ -1089,45 +1089,95 @@ ROM/RAM 実体のどのバンクを参照するかを MBC1 に任せられるよ
 
 を確認している。
 
-### 8.3 最小限の PPU スケルトン
+### 8.3 PPU による背景タイル描画の最小実装
 
-描画周りについては、まず「**CPU と VRAM は実装済み / 画面は真っ黒でよい**」という前提で  
-PPU の器だけを `Ppu` クラスとして用意した。
+描画周りについては、「**CPU と VRAM の配線ができている前提で、まずは背景だけを表示する**」ことを目標に  
+PPU の `renderFrame()` を実装した。現時点では：
 
-```1:40:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Ppu.kt
+- LCDC/STAT/スクロールなどは無視
+- **BG マップ 0（0x9800–0x9BFF）をそのまま画面左上に貼る**
+- タイルデータは 0x8000–0x87FF を使用（1 タイル 8x8, 16 バイト）
+- パレットは固定 4 階調（白〜黒）
+
+という単純な仕様になっている。
+
+```1:48:app/gb-core-kotlin/src/main/java/gb/core/impl/cpu/Ppu.kt
+@OptIn(ExperimentalUnsignedTypes::class)
 class Ppu(
+    @Suppress("UnusedPrivateProperty")
     private val vram: UByteArray,
 ) {
     companion object {
         const val SCREEN_WIDTH = 160
         const val SCREEN_HEIGHT = 144
+
+        private const val TILE_DATA_BASE = 0x0000 // 0x8000–0x97FF
+        private const val BG_MAP0_BASE = 0x1800 // 0x9800–0x9BFF
+        private const val BG_MAP_WIDTH = 32
+        private const val TILE_SIZE_BYTES = 16
     }
 
     fun step(cycles: Int) {
-        // TODO(miyabi): PPU のモード遷移などを実装
+        // TODO(miyabi): LCDC/STAT, スキャンライン、モード遷移などを実装
+        if (cycles <= 0) return
     }
 
     fun renderFrame(): IntArray {
         val pixels = IntArray(SCREEN_WIDTH * SCREEN_HEIGHT)
-        val black = 0xFF000000.toInt()
-        for (i in pixels.indices) {
-            pixels[i] = black
+
+        for (y in 0 until SCREEN_HEIGHT) {
+            val tileRow = y / 8
+            val rowInTile = y % 8
+
+            for (x in 0 until SCREEN_WIDTH) {
+                val tileCol = x / 8
+                val colInTile = x % 8
+
+                val bgIndex = BG_MAP0_BASE + tileRow * BG_MAP_WIDTH + tileCol
+                val tileIndex = vram.getOrElse(bgIndex) { 0u }.toInt() and 0xFF
+
+                val tileBase = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES
+                val lineAddr = tileBase + rowInTile * 2
+
+                val low = vram.getOrElse(lineAddr) { 0u }.toInt()
+                val high = vram.getOrElse(lineAddr + 1) { 0u }.toInt()
+
+                val bit = 7 - colInTile
+                val colorId = (((high shr bit) and 0x1) shl 1) or ((low shr bit) and 0x1)
+
+                pixels[y * SCREEN_WIDTH + x] = mapColorIdToArgb(colorId)
+            }
         }
+
         return pixels
     }
+
+    private fun mapColorIdToArgb(colorId: Int): Int =
+        when (colorId) {
+            0 -> 0xFFFFFFFF.toInt()
+            1 -> 0xFFAAAAAA.toInt()
+            2 -> 0xFF555555.toInt()
+            else -> 0xFF000000.toInt()
+        }
 }
 ```
 
-現段階では:
+イメージとしては：
 
-- `step(cycles)` は「PPU の内部時間を進めるだけ」のダミー（何もしない）
-- `renderFrame()` は常に真っ黒な 160x144 の ARGB 配列を返す
+- `BG_MAP0_BASE`（`0x1800`）は VRAM 内で `0x9800` に相当する（`0x9800 - 0x8000`）
+- 各 BG エントリは 1 バイトでタイル番号を指し示す
+- タイル番号 `n` は、`TILE_DATA_BASE + n * 16` を先頭とする 8x8 タイル
+  - 1 ラインあたり 2 バイト（low/high）
+  - `colorId` は `((high >> bit) & 1) << 1 | ((low >> bit) & 1)` で 0〜3 を得る
+- `colorId` を固定パレット（白〜黒）にマップして ARGB に変換
 
-という仕様にとどめておき、  
-**CPU・MBC1・SystemBus・割り込み／タイマまわりの挙動を先に固める**ことを優先している。
+という流れで、**背景だけだが Game Boy のタイル描画と同じビット構造** を辿れるようになっている。
 
-PPU の本格的な実装（LCDC/STAT、タイル／背景／スプライト、スキャンライン処理など）は、  
-ポケモンの ACE を読み解く上で必要になったタイミングで追加していく。
+`PpuTest` では、タイル 0 に「すべて colorId=3（黒）」となるパターンを埋め込み、  
+BG マップ左上にタイル 0 を置いたときに、画面左上 8x8 ピクセルがすべて黒になることを検証している。
+
+今後、LCDC/STAT/スクロール（SCX/SCY）やウィンドウ／スプライトを追加しても、  
+この「VRAM → タイルデコード → 画素」の基礎部分はそのまま再利用できる。
 
 ---
 
