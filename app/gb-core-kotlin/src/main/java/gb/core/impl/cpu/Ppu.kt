@@ -30,6 +30,21 @@ class Ppu(
         // PPU タイミング定数
         const val CYCLES_PER_SCANLINE = 456 // 1スキャンライン = 456 CPUサイクル
         const val TOTAL_SCANLINES = 154 // 144行の描画 + 10行のVBlank = 154行（0-153）
+        
+        // PPUモードのタイミング定数
+        const val CYCLES_MODE_2 = 80 // OAM Search
+        const val CYCLES_MODE_3_MIN = 172 // Pixel Transfer（最小）
+        const val CYCLES_MODE_3_MAX = 289 // Pixel Transfer（最大）
+    }
+    
+    /**
+     * PPUモード（STATレジスタのbit 0-1）
+     */
+    private enum class PpuMode(val value: Int) {
+        HBLANK(0),      // Mode 0: 水平ブランク期間
+        VBLANK(1),      // Mode 1: 垂直ブランク期間
+        OAM_SEARCH(2),  // Mode 2: OAM検索期間
+        PIXEL_TRANSFER(3), // Mode 3: ピクセル転送期間
     }
 
     // PPU I/O レジスタ（最小限の実装）
@@ -49,6 +64,16 @@ class Ppu(
     // PPU 内部状態
     private var scanlineCycles: Int = 0 // 現在のスキャンライン内の累積サイクル数
     private var previousLy: UByte = 0x00u // 前回のLY値（VBlank割り込み検出用）
+    private var currentMode: PpuMode = PpuMode.OAM_SEARCH // 現在のPPUモード（初期状態はMode 2）
+    private var modeCycles: Int = 0 // 現在のモード内の累積サイクル数
+    
+    // DMA転送状態（SystemBusからアクセス可能にするため、publicにする）
+    var dmaActive: Boolean = false
+        private set
+    var dmaCyclesRemaining: Int = 0
+        private set
+    var dmaSourceBase: UShort = 0u
+        private set
 
     /**
      * PPU I/O レジスタの読み取り。
@@ -58,7 +83,15 @@ class Ppu(
     fun readRegister(offset: Int): UByte =
         when (offset) {
             0x00 -> lcdc // 0xFF40
-            0x01 -> stat // 0xFF41
+            0x01 -> {
+                // 0xFF41 (STAT): 現在のモードとLYC=LYフラグを反映
+                val currentModeBits = currentMode.value.toUByte()
+                val lycMatchBit = if (ly == lyc) 0x04u.toUByte() else 0x00u.toUByte()
+                // 下位3bit（モード、LYC=LY）は読み取り専用、上位5bitは書き込み可能
+                val statUpper = stat and 0xF8u.toUByte()
+                val result = (statUpper.toInt() or currentModeBits.toInt() or lycMatchBit.toInt()) and 0xFF
+                result.toUByte()
+            }
             0x02 -> scy // 0xFF42
             0x03 -> scx // 0xFF43
             0x04 -> ly // 0xFF44 (読み取り専用)
@@ -92,9 +125,12 @@ class Ppu(
             }
             0x05 -> lyc = value // 0xFF45
             0x06 -> {
-                // 0xFF46 (DMA) - OAM DMA転送を開始（未実装）
+                // 0xFF46 (DMA) - OAM DMA転送を開始
+                // 値は転送元アドレスの上位バイト（例: 0xC0 → 0xC000）
                 dma = value
-                // TODO(miyabi): DMA転送を実装
+                dmaSourceBase = (value.toUShort().toInt() shl 8).toUShort()
+                dmaActive = true
+                dmaCyclesRemaining = 160 // 160サイクルで転送完了
             }
             0x07 -> bgp = value // 0xFF47
             0x08 -> obp0 = value // 0xFF48
@@ -108,6 +144,9 @@ class Ppu(
      * CPU サイクルに応じて PPU 内部状態を進める。
      *
      * - スキャンライン（LYレジスタ）を更新する。
+     * - PPUモード遷移を実装（Mode 0-3）
+     * - LCD_STAT割り込みを実装
+     * - LYC比較割り込みを実装
      * - 1スキャンライン = 456 CPUサイクル
      * - 144行の描画（0-143）+ 10行のVBlank（144-153）= 154行（0-153）
      */
@@ -116,27 +155,130 @@ class Ppu(
             return
         }
 
-        scanlineCycles += cycles
-
-        // 456サイクルごとにスキャンラインを進める
-        val lyBefore = ly
-        while (scanlineCycles >= CYCLES_PER_SCANLINE) {
-            scanlineCycles -= CYCLES_PER_SCANLINE
-            previousLy = ly
-            ly = ((ly.toInt() + 1) % TOTAL_SCANLINES).toUByte()
-
-            // VBlank割り込み: LYが144（VBlank開始）になったときに発生
-            if (previousLy == 143u.toUByte() && ly == 144u.toUByte()) {
-                interruptController.request(InterruptController.Type.VBLANK)
+        // DMA転送の進行
+        if (dmaActive) {
+            dmaCyclesRemaining -= cycles
+            if (dmaCyclesRemaining <= 0) {
+                dmaActive = false
+                dmaCyclesRemaining = 0
             }
         }
 
-        // デバッグ: LYレジスタが144に達したときのみログ出力
-        if (ly == 144u.toUByte() && lyBefore != 144u.toUByte()) {
-            android.util.Log.d(
-                "PPU",
-                "VBlank started: LY=$ly",
-            )
+        // LCDが無効な場合は、Mode 0（HBlank）に設定して終了
+        val lcdEnabled = (lcdc.toInt() and 0x80) != 0
+        if (!lcdEnabled) {
+            currentMode = PpuMode.HBLANK
+            modeCycles = 0
+            return
+        }
+
+        var remainingCycles = cycles
+        while (remainingCycles > 0) {
+            // スキャンラインが終了している場合は、次のスキャンラインに進む
+            if (scanlineCycles >= CYCLES_PER_SCANLINE) {
+                scanlineCycles = 0
+                modeCycles = 0
+                previousLy = ly
+                ly = ((ly.toInt() + 1) % TOTAL_SCANLINES).toUByte()
+                
+                // LYC比較のチェック
+                checkLycMatch()
+                
+                if (ly.toInt() < SCREEN_HEIGHT) {
+                    // 次のスキャンライン開始（Mode 2）
+                    setMode(PpuMode.OAM_SEARCH)
+                } else if (ly == 144u.toUByte()) {
+                    // VBlank開始（Mode 1）
+                    setMode(PpuMode.VBLANK)
+                    interruptController.request(InterruptController.Type.VBLANK)
+                    checkStatInterrupt(PpuMode.VBLANK)
+                    checkLycMatch()
+                } else if (ly == 0u.toUByte()) {
+                    // VBlank終了、次のフレーム開始（Mode 2）
+                    setMode(PpuMode.OAM_SEARCH)
+                }
+            }
+            
+            val cyclesToProcess = minOf(remainingCycles, CYCLES_PER_SCANLINE - scanlineCycles)
+            if (cyclesToProcess <= 0) {
+                // サイクルが処理できない場合は終了（安全装置）
+                break
+            }
+            
+            remainingCycles -= cyclesToProcess
+            scanlineCycles += cyclesToProcess
+            modeCycles += cyclesToProcess
+
+            // モード遷移の処理
+            when (currentMode) {
+                PpuMode.OAM_SEARCH -> {
+                    // Mode 2: OAM Search（80サイクル）
+                    if (modeCycles >= CYCLES_MODE_2) {
+                        setMode(PpuMode.PIXEL_TRANSFER)
+                    }
+                }
+                PpuMode.PIXEL_TRANSFER -> {
+                    // Mode 3: Pixel Transfer（172-289サイクル、簡易実装として200サイクル）
+                    if (modeCycles >= 200) {
+                        setMode(PpuMode.HBLANK)
+                        // HBlank割り込みのチェック
+                        checkStatInterrupt(PpuMode.HBLANK)
+                    }
+                }
+                PpuMode.HBLANK -> {
+                    // Mode 0: HBlank（残りのサイクル）
+                    // スキャンライン終了処理はループの先頭で行う
+                }
+                PpuMode.VBLANK -> {
+                    // Mode 1: VBlank（10スキャンライン）
+                    // スキャンライン終了処理はループの先頭で行う
+                }
+            }
+        }
+    }
+    
+    /**
+     * PPUモードを設定し、必要に応じて割り込みを発生させる。
+     */
+    private fun setMode(newMode: PpuMode) {
+        if (currentMode != newMode) {
+            currentMode = newMode
+            modeCycles = 0
+            
+            // Mode 2（OAM Search）割り込みのチェック
+            if (newMode == PpuMode.OAM_SEARCH) {
+                checkStatInterrupt(PpuMode.OAM_SEARCH)
+            }
+        }
+    }
+    
+    /**
+     * STAT割り込みをチェックし、条件が満たされていれば発生させる。
+     */
+    private fun checkStatInterrupt(mode: PpuMode) {
+        val modeBit = when (mode) {
+            PpuMode.HBLANK -> 3
+            PpuMode.VBLANK -> 4
+            PpuMode.OAM_SEARCH -> 5
+            PpuMode.PIXEL_TRANSFER -> return // Mode 3では割り込みは発生しない
+        }
+        
+        val interruptEnabled = (stat.toInt() and (1 shl modeBit)) != 0
+        if (interruptEnabled) {
+            interruptController.request(InterruptController.Type.LCD_STAT)
+        }
+    }
+    
+    /**
+     * LYC=LY比較をチェックし、条件が満たされていれば割り込みを発生させる。
+     */
+    private fun checkLycMatch() {
+        if (ly == lyc) {
+            // LYC=LY割り込みのチェック（STAT bit 6）
+            val interruptEnabled = (stat.toInt() and 0x40) != 0
+            if (interruptEnabled) {
+                interruptController.request(InterruptController.Type.LCD_STAT)
+            }
         }
     }
 
@@ -166,32 +308,25 @@ class Ppu(
         val bgMapNonZero = (BG_MAP0_BASE until BG_MAP0_BASE + 0x400).count { vram.getOrElse(it) { 0u.toUByte() } != 0u.toUByte() }
         val tileDataNonZero = (TILE_DATA_BASE until TILE_DATA_BASE + 0x1800).count { vram.getOrElse(it) { 0u.toUByte() } != 0u.toUByte() }
 
-        // デバッグ: 60フレームごとにPPUの状態をログ出力
-        if (bgMapNonZero > 0 || tileDataNonZero > 0) {
-            try {
-                android.util.Log.d(
-                    "PPU",
-                    "renderFrame: LCDC=0x${lcdc.toString(16)}, SCX=$scx, SCY=$scy, BGP=0x${bgp.toString(16)}, " +
-                        "BG map non-zero=$bgMapNonZero, Tile data non-zero=$tileDataNonZero",
-                )
-            } catch (_: RuntimeException) {
-                // テスト環境では Log がモックされていない可能性があるため、無視
-            }
-        }
-
         if (bgMapNonZero == 0 && tileDataNonZero == 0) {
             // VRAM がすべて 0 の場合は、テストパターンを描画して CPU が VRAM に書き込んでいないことを示す
-            android.util.Log.w("PPU", "VRAM is empty (BG map: $bgMapNonZero non-zero, Tile data: $tileDataNonZero non-zero)")
+            // ログ出力は削除（パフォーマンス向上のため）
             return renderTestPattern()
         }
 
-        for (y in 0 until SCREEN_HEIGHT) {
-            // スクロールYを考慮した背景Y座標
-            val bgY = (y + scy.toInt()) and 0xFF
-            val tileRow = bgY / 8
-            val rowInTile = bgY % 8
+        // 背景/ウィンドウのカラーIDを保持する配列（スプライトの優先度処理用）
+        val bgColorIds = UByteArray(SCREEN_WIDTH * SCREEN_HEIGHT) { 0u }
 
-            for (x in 0 until SCREEN_WIDTH) {
+        // 背景描画（カラーIDを保持）
+        val bgEnabled = (lcdc.toInt() and 0x01) != 0
+        if (bgEnabled) {
+            for (y in 0 until SCREEN_HEIGHT) {
+                // スクロールYを考慮した背景Y座標
+                val bgY = (y + scy.toInt()) and 0xFF
+                val tileRow = bgY / 8
+                val rowInTile = bgY % 8
+
+                for (x in 0 until SCREEN_WIDTH) {
                 // スクロールXを考慮した背景X座標
                 val bgX = (x + scx.toInt()) and 0xFF
                 val tileCol = bgX / 8
@@ -234,17 +369,123 @@ class Ppu(
                     (((high shr bit) and 0x1) shl 1) or
                         ((low shr bit) and 0x1)
 
-                pixels[y * SCREEN_WIDTH + x] = mapColorIdToArgb(colorId, bgp)
+                    val pixelIndex = y * SCREEN_WIDTH + x
+                    pixels[pixelIndex] = mapColorIdToArgb(colorId, bgp)
+                    bgColorIds[pixelIndex] = colorId.toUByte()
+                }
             }
+        } else {
+            // 背景が無効な場合は、すべて白で塗りつぶし、カラーIDは0
+            for (y in 0 until SCREEN_HEIGHT) {
+                for (x in 0 until SCREEN_WIDTH) {
+                    val pixelIndex = y * SCREEN_WIDTH + x
+                    pixels[pixelIndex] = 0xFFFFFFFF.toInt()
+                    bgColorIds[pixelIndex] = 0u
+                }
+            }
+        }
+
+        // ウィンドウ描画（背景の上、スプライトの下に描画）
+        // LCDC.5 (Window Enable) が 1 の場合のみ描画
+        val windowEnabled = (lcdc.toInt() and 0x20) != 0
+        if (windowEnabled) {
+            renderWindow(pixels, bgColorIds)
         }
 
         // スプライトの描画（LCDC.1が1の場合のみ）
         val spriteEnabled = (lcdc.toInt() and 0x02) != 0
         if (spriteEnabled) {
-            renderSprites(pixels)
+            renderSprites(pixels, bgColorIds)
         }
 
         return pixels
+    }
+
+    /**
+     * ウィンドウを描画する。
+     *
+     * - ウィンドウは背景の上に描画される
+     * - ウィンドウレジスタ（WX/WY）を使用
+     *   - WX (0xFF4B): ウィンドウの左端のX座標（実際のX座標 = WX - 7）
+     *   - WY (0xFF4A): ウィンドウの上端のY座標
+     * - LCDC.5 (Window Enable) が 1 の場合のみ描画
+     * - LCDC.6 (Window Tile Map) でウィンドウマップを選択
+     * - ウィンドウ描画時もカラーIDを保持する
+     */
+    private fun renderWindow(pixels: IntArray, bgColorIds: UByteArray) {
+        val wyInt = wy.toInt()
+        val wxInt = wx.toInt()
+
+        // WYが144以上の場合、ウィンドウは表示されない（画面外）
+        if (wyInt >= SCREEN_HEIGHT) return
+
+        // WXが7未満の場合、ウィンドウは表示されない（実機の仕様）
+        if (wxInt < 7) return
+
+        // WXが166以上の場合、ウィンドウは表示されない（画面外）
+        // 実際のX座標 = WX - 7 なので、WX >= 166 の場合は画面外
+        if (wxInt >= 166) return
+
+        // ウィンドウの左上座標（画面座標系）
+        // WXレジスタの値から7を引いた値が実際のX座標
+        val windowStartX = wxInt - 7
+        val windowStartY = wyInt
+
+        // LCDC.6 でウィンドウマップを選択
+        // 0: ウィンドウマップ0（0x9800–0x9BFF）
+        // 1: ウィンドウマップ1（0x9C00–0x9FFF）
+        val windowMapBase = if (((lcdc.toInt() shr 6) and 0x1) == 0) {
+            BG_MAP0_BASE
+        } else {
+            BG_MAP1_BASE
+        }
+
+        // ウィンドウ内の各ピクセルを描画
+        // ウィンドウは画面の特定の領域にのみ描画される
+        for (y in windowStartY until SCREEN_HEIGHT) {
+            // ウィンドウ内のY座標（ウィンドウのタイルマップ内での位置）
+            val windowY = y - windowStartY
+            val tileRow = windowY / 8
+            val rowInTile = windowY % 8
+
+            for (x in windowStartX until SCREEN_WIDTH) {
+                // ウィンドウ内のX座標（ウィンドウのタイルマップ内での位置）
+                val windowX = x - windowStartX
+                val tileCol = windowX / 8
+                val colInTile = windowX % 8
+
+                // 32x32タイルマップなので、モジュロ演算でラップアラウンド
+                val windowIndex = windowMapBase + (tileRow % 32) * BG_MAP_WIDTH + (tileCol % 32)
+                val tileIndexByte = vram.getOrElse(windowIndex) { 0u }
+
+                // LCDC.4 でタイルデータアドレッシングモードを決定（背景と同じ）
+                val tileDataMode = (lcdc.toInt() shr 4) and 0x1
+                val tileIndex = if (tileDataMode == 0) {
+                    // 符号付き: 0x80-0xFF は -128〜-1 として扱う
+                    val signed = tileIndexByte.toInt().toByte().toInt()
+                    256 + signed // 0x8800 ベースに変換
+                } else {
+                    // 符号なし: 0x8000 ベース
+                    tileIndexByte.toInt()
+                }
+
+                // タイルデータは 0x8000 から、1 タイル 16 バイト
+                val tileBase = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES
+                val lineAddr = tileBase + rowInTile * 2
+
+                val low = vram.getOrElse(lineAddr) { 0u }.toInt()
+                val high = vram.getOrElse(lineAddr + 1) { 0u }.toInt()
+
+                val bit = 7 - colInTile
+                val colorId =
+                    (((high shr bit) and 0x1) shl 1) or
+                        ((low shr bit) and 0x1)
+
+                val pixelIndex = y * SCREEN_WIDTH + x
+                pixels[pixelIndex] = mapColorIdToArgb(colorId, bgp)
+                bgColorIds[pixelIndex] = colorId.toUByte()
+            }
+        }
     }
 
     /**
@@ -254,8 +495,12 @@ class Ppu(
      * - 各スプライトは4バイト：Y, X, タイルインデックス, 属性
      * - 最大10個のスプライトを描画（実機の制限）
      * - LCDC.2でスプライトサイズを決定（0=8x8、1=8x16）
+     * - 優先度処理：優先度が高い（bit7=1）場合、背景/ウィンドウのカラーID 0以外の上には描画しない
+     *
+     * @param pixels ピクセル配列（ARGB形式）
+     * @param bgColorIds 背景/ウィンドウのカラーID配列（優先度処理用）
      */
-    private fun renderSprites(pixels: IntArray) {
+    private fun renderSprites(pixels: IntArray, bgColorIds: UByteArray) {
         val spriteSize = if (((lcdc.toInt() shr 2) and 0x1) == 0) 8 else 16
 
         // 各スキャンラインで、そのラインに表示されるスプライトを検索して描画
@@ -276,10 +521,9 @@ class Ppu(
                 }
             }
 
-            // スプライトを描画（X座標の降順で描画：左側のスプライトが優先）
-            spritesOnLine.sortedByDescending { i ->
-                oam.getOrElse(i * 4 + 1) { 0u }.toInt()
-            }.forEach { i ->
+            // スプライトを描画（OAMの順序（インデックス昇順）で描画：実機の仕様に準拠）
+            // 後から描画されたスプライトが前に描画されたスプライトの上に描画される
+            spritesOnLine.forEach { i ->
                 val oamIndex = i * 4
                 val spriteY = oam.getOrElse(oamIndex) { 0u }.toInt() - 16
                 val spriteX = oam.getOrElse(oamIndex + 1) { 0u }.toInt() - 8
@@ -320,15 +564,16 @@ class Ppu(
                     // カラーID 0は透明（スプライトは描画しない）
                     if (colorId == 0) continue
 
-                    // 優先度チェック：優先度が高い場合、背景のカラーID 0以外の上には描画しない
                     val pixelIndex = y * SCREEN_WIDTH + screenX
-                    val bgColor = pixels[pixelIndex]
-                    // 背景のカラーIDを取得（簡易的な方法：ARGBから推測）
-                    // 実際には背景のカラーIDを保持する必要があるが、簡易実装として
-                    // 背景が白（0xFFFFFFFF）でない場合は優先度を考慮
-                    if (priority && bgColor != 0xFFFFFFFF.toInt() && bgColor != 0xFF000000.toInt()) {
-                        // 背景が白でも黒でもない場合（実際のタイル）は描画しない
-                        continue
+
+                    // 優先度チェック：優先度が高い（bit7=1）場合、背景/ウィンドウのカラーID 0以外の上には描画しない
+                    // 実機の仕様：優先度が高いスプライトは、背景/ウィンドウの透明部分（カラーID 0）の上にのみ描画される
+                    if (priority) {
+                        val bgColorId = bgColorIds[pixelIndex]
+                        // 背景/ウィンドウのカラーIDが0以外の場合は描画しない
+                        if (bgColorId != 0u.toUByte()) {
+                            continue
+                        }
                     }
 
                     pixels[pixelIndex] = mapColorIdToArgb(colorId, palette)

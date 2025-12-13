@@ -123,13 +123,6 @@ class SystemBus(
             in 0x8000..0x9FFF -> {
                 val vramIndex = addr - 0x8000
                 vram[vramIndex] = value
-                // デバッグ: VRAMへの最初の数回の書き込みをログ出力
-                if (vramIndex < 0x100) {
-                    android.util.Log.d(
-                        "SystemBus",
-                        "VRAM write: 0x${addr.toString(16)} = 0x${value.toString(16)}",
-                    )
-                }
             }
             in 0xA000..0xBFFF -> {
                 val ram = cartridgeRam ?: return
@@ -153,7 +146,10 @@ class SystemBus(
                 }
             }
             in 0xFE00..0xFE9F -> {
-                oam[addr - 0xFE00] = value
+                // DMA転送中は、OAMへの直接書き込みは無視される（実機の仕様）
+                if (!ppu.dmaActive) {
+                    oam[addr - 0xFE00] = value
+                }
             }
             in 0xFEA0..0xFEFF -> {
                 // 未使用領域: 書き込みは無視
@@ -173,6 +169,12 @@ class SystemBus(
                 // PPU I/O レジスタ（LCDC/STAT/SCY/SCX/LY/LYC/DMA/BGP/OBP0/OBP1/WY/WX）
                 val offset = addr - 0xFF40
                 ppu.writeRegister(offset, value)
+                
+                // DMA転送が開始された場合、即座に転送を実行（簡易実装）
+                // 実機では160サイクルかかるが、ここでは即座に完了させる
+                if (offset == 0x06 && ppu.dmaActive) {
+                    performDmaTransfer(ppu.dmaSourceBase)
+                }
             }
             in 0xFF10..0xFF3F -> {
                 ioRegs[addr - 0xFF10] = value // サウンド（未実装）
@@ -184,6 +186,22 @@ class SystemBus(
                 hram[addr - 0xFF80] = value
             }
             0xFFFF -> interruptController.writeIe(value)
+        }
+    }
+
+    /**
+     * OAM DMA転送を実行する。
+     *
+     * - 転送元: [sourceBase] から 160バイト
+     * - 転送先: 0xFE00-0xFE9F (OAM)
+     * - 実機では160サイクルかかるが、ここでは即座に完了させる
+     */
+    private fun performDmaTransfer(sourceBase: UShort) {
+        val sourceBaseInt = sourceBase.toInt()
+        for (i in 0 until 0xA0) {
+            val sourceAddr = sourceBaseInt + i
+            val byte = readByteInternal(sourceAddr)
+            oam[i] = byte
         }
     }
 }

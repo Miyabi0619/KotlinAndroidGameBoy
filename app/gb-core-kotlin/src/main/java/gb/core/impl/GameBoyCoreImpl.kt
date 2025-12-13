@@ -146,7 +146,8 @@ class GameBoyCoreImpl : GameBoyCore {
             frameIndex += 1
 
             val pixels = m.ppu.renderFrame()
-            if (frameIndex % 60 == 1L) {
+            // ログ出力の頻度を大幅に減らす（600フレームごと = 約10秒ごと）
+            if (frameIndex % 600 == 1L) {
                 // PCの値を確認（CPUが進んでいるか）
                 val pc = m.cpu.registers.pc
                 val ifReg = m.readIf()

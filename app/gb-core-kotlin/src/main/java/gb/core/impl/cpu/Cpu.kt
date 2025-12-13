@@ -130,23 +130,6 @@ class Cpu(
         val pcBefore = registers.pc
         val opcode = bus.readByte(pcBefore).toInt()
 
-        // デバッグ: 特定のアドレス範囲でログ出力（タイトル画面後の進行確認用）
-        if (pcBefore.toInt() in 0x4000..0x4100) {
-            try {
-                Log.d(
-                    "CPU",
-                    "Executing: PC=0x${pcBefore.toString(16)}, opcode=0x${opcode.toString(16)}, " +
-                        "A=0x${registers.a.toString(16)}, B=0x${registers.b.toString(16)}, " +
-                        "C=0x${registers.c.toString(16)}, D=0x${registers.d.toString(16)}, " +
-                        "E=0x${registers.e.toString(16)}, H=0x${registers.h.toString(16)}, " +
-                        "L=0x${registers.l.toString(16)}, SP=0x${registers.sp.toString(16)}, " +
-                        "Z=${registers.flagZ}, C=${registers.flagC}, halted=$halted, IME=$interruptMasterEnabled",
-                )
-            } catch (_: RuntimeException) {
-                // テスト環境では Log がモックされていない可能性があるため、無視
-            }
-        }
-
         // 次の命令に備えて PC を 1 バイト分進める。
         registers.pc = (pcBefore.toInt() + 1).toUShort()
 
@@ -201,16 +184,7 @@ class Cpu(
         halted = false
         stopped = false
         
-        // デバッグ: 割り込み処理のログ
-        try {
-            Log.d(
-                "CPU",
-                "serviceInterrupt: type=${type.name}, vector=0x${type.vector.toString(16)}, " +
-                    "PC before=0x${registers.pc.toString(16)}, SP=0x${registers.sp.toString(16)}",
-            )
-        } catch (_: RuntimeException) {
-            // テスト環境では Log がモックされていない可能性があるため、無視
-        }
+        // ログ出力を削除（パフォーマンス向上のため）
 
         // 現在の PC を戻りアドレスとしてスタックに退避
         pushWord(registers.pc)

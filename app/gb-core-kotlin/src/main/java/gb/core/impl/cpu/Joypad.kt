@@ -86,15 +86,7 @@ class Joypad(
             )
 
         if (pressedNow.any { it }) {
-            try {
-                android.util.Log.d(
-                    "Joypad",
-                    "Button pressed: A=${newState.a}, B=${newState.b}, Select=${newState.select}, Start=${newState.start}, " +
-                        "Up=${newState.up}, Down=${newState.down}, Left=${newState.left}, Right=${newState.right}",
-                )
-            } catch (_: RuntimeException) {
-                // テスト環境では Log がモックされていない可能性があるため、無視
-            }
+            // ログ出力を削除（パフォーマンス向上のため）
             interruptController.request(InterruptController.Type.JOYPAD)
         }
     }

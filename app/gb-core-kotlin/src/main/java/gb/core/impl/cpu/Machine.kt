@@ -65,14 +65,6 @@ class Machine(
         val ifReg = interruptController.readIf()
         val ieReg = interruptController.readIe()
 
-        // デバッグ: 割り込み処理時のみログ出力
-        if (ifReg != 0u.toUByte()) {
-            android.util.Log.d(
-                "Machine",
-                "handleInterrupts: IF=0x${ifReg.toString(16)}, IE=0x${ieReg.toString(16)}, IME=${cpu.isInterruptsEnabled()}, halted=${cpu.isHalted()}",
-            )
-        }
-
         if (ifReg == 0u.toUByte()) {
             return 0
         }
@@ -81,10 +73,6 @@ class Machine(
         if (cpu.isInterruptsEnabled()) {
             val pending = interruptController.nextPending(true)
             if (pending != null) {
-                android.util.Log.d(
-                    "Machine",
-                    "Servicing interrupt: ${pending.name}, PC before=0x${cpu.registers.pc.toString(16)}",
-                )
                 return cpu.serviceInterrupt(pending)
             }
             // IMEが有効でも、IEレジスタで許可されていない場合は割り込みを処理しない
