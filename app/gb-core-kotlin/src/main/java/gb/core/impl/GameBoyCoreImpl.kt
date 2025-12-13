@@ -92,7 +92,7 @@ class GameBoyCoreImpl : GameBoyCore {
                 val cycles = m.stepInstruction()
                 accumulatedCycles += cycles
                 instructionCount++
-                
+
                 // HALT状態の場合、PPUを進めるために追加サイクルを渡す
                 // 実機では、HALT状態でもPPUは動作し続ける
                 // ただし、効率化のため、HALT状態が続く場合は一気にフレーム終了まで進める
@@ -146,6 +146,7 @@ class GameBoyCoreImpl : GameBoyCore {
             frameIndex += 1
 
             val pixels = m.ppu.renderFrame()
+            val audioSamples = m.sound.generateSamples()
             // ログ出力の頻度を大幅に減らす（600フレームごと = 約10秒ごと）
             if (frameIndex % 600 == 1L) {
                 // PCの値を確認（CPUが進んでいるか）
@@ -171,6 +172,7 @@ class GameBoyCoreImpl : GameBoyCore {
             CoreResult.success(
                 FrameResult(
                     frameBuffer = pixels,
+                    audioSamples = audioSamples,
                     stats = stats,
                 ),
             )

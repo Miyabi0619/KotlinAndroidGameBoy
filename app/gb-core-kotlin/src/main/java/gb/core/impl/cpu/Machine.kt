@@ -15,6 +15,7 @@ class Machine(
     private val interruptController = InterruptController()
     private val timer = Timer(interruptController)
     private val joypad = Joypad(interruptController)
+    val sound: Sound = Sound()
 
     private val bus: SystemBus
 
@@ -43,10 +44,12 @@ class Machine(
         val cycles = cpu.executeInstruction()
         timer.step(cycles)
         ppu.step(cycles)
+        sound.step(cycles)
 
         val interruptCycles = handleInterrupts()
         if (interruptCycles > 0) {
             timer.step(interruptCycles)
+            sound.step(interruptCycles)
         }
 
         return cycles + interruptCycles
@@ -106,6 +109,7 @@ class Machine(
                 mbc1 = mbc1,
                 joypad = joypad,
                 ppu = ppu,
+                sound = sound,
             )
         cpu = Cpu(bus)
 

@@ -14,6 +14,14 @@ data class FrameResult(
      */
     val frameBuffer: IntArray,
     /**
+     * オーディオサンプル。
+     *
+     * - 1フレーム分のオーディオサンプル（約735サンプル、44.1kHzの場合）
+     * - 16bit PCM形式（Short配列）
+     * - nullの場合はオーディオ出力なし
+     */
+    val audioSamples: ShortArray? = null,
+    /**
      * オプションのデバッグ情報。
      */
     val stats: FrameStats? = null,

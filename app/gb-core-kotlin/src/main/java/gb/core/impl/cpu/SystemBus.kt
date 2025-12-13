@@ -32,6 +32,10 @@ class SystemBus(
      */
     ppu: Ppu,
     /**
+     * サウンド処理（APU）
+     */
+    sound: Sound,
+    /**
      * ROM が MBC1 カートリッジであれば Mbc1 インスタンスを渡す。
      * それ以外のカートリッジでは null（ノーマッパ）とする。
      */
@@ -46,11 +50,14 @@ class SystemBus(
     private val ppu: Ppu = ppu
 
     /**
-     * 汎用 I/O レジスタ（FF10–FF3F, FF50–FF7F）のバックアップ。
-     *
-     * - サウンドなどはまだ未実装なので、とりあえず値を保持するだけ。
+     * サウンド処理（APU）
      */
-    private val ioRegs: UByteArray = UByteArray(0x60) { 0u }
+    private val sound: Sound = sound
+    
+    /**
+     * その他 I/O レジスタ（FF50–FF7F）のバックアップ。
+     */
+    private val ioRegs: UByteArray = UByteArray(0x30) { 0u }
 
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
@@ -103,7 +110,11 @@ class SystemBus(
                 val offset = addr - 0xFF40
                 ppu.readRegister(offset)
             }
-            addr in 0xFF10..0xFF3F -> ioRegs[addr - 0xFF10] // サウンド（未実装）
+            addr in 0xFF10..0xFF3F -> {
+                // サウンドレジスタ（0xFF10-0xFF3F）
+                val offset = addr - 0xFF10
+                sound.readRegister(offset)
+            }
             addr in 0xFF50..0xFF7F -> ioRegs[addr - 0xFF50] // その他I/O（未実装）
             addr in 0xFF80..0xFFFE -> hram[addr - 0xFF80]
             addr == 0xFFFF -> interruptController.readIe()
@@ -169,7 +180,7 @@ class SystemBus(
                 // PPU I/O レジスタ（LCDC/STAT/SCY/SCX/LY/LYC/DMA/BGP/OBP0/OBP1/WY/WX）
                 val offset = addr - 0xFF40
                 ppu.writeRegister(offset, value)
-                
+
                 // DMA転送が開始された場合、即座に転送を実行（簡易実装）
                 // 実機では160サイクルかかるが、ここでは即座に完了させる
                 if (offset == 0x06 && ppu.dmaActive) {
@@ -177,7 +188,9 @@ class SystemBus(
                 }
             }
             in 0xFF10..0xFF3F -> {
-                ioRegs[addr - 0xFF10] = value // サウンド（未実装）
+                // サウンドレジスタ（0xFF10-0xFF3F）
+                val offset = addr - 0xFF10
+                sound.writeRegister(offset, value)
             }
             in 0xFF50..0xFF7F -> {
                 ioRegs[addr - 0xFF50] = value // その他I/O（未実装）

@@ -2,6 +2,9 @@ package miyabi.kotlinandroidgameboy
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -148,6 +151,42 @@ private fun gameScreen(
             },
         )
 
+    // オーディオ出力の初期化
+    val audioTrack = remember {
+        val sampleRate = 44100
+        val channelConfig = AudioFormat.CHANNEL_OUT_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
+        
+        AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_GAME)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(sampleRate)
+                    .setEncoding(audioFormat)
+                    .setChannelMask(channelConfig)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+    }
+    
+    // オーディオ出力の開始/停止
+    LaunchedEffect(isRunning) {
+        if (isRunning) {
+            audioTrack.play()
+        } else {
+            audioTrack.pause()
+            audioTrack.flush()
+        }
+    }
+    
     // シンプルなゲームループ（UI スレッドを塞がないようにコルーチンで）
     LaunchedEffect(isRunning, romLoaded) {
         android.util.Log.d("GameLoop", "LaunchedEffect: isRunning=$isRunning, romLoaded=$romLoaded")
@@ -157,13 +196,26 @@ private fun gameScreen(
         }
         android.util.Log.d("GameLoop", "Game loop started")
         var frameCount = 0
+        // フレームレート制御用の変数
+        val targetFrameTime = 1000.0 / 59.7275 // 約16.74ms（実機のフレームレート）
+        var lastFrameTime = System.nanoTime() / 1_000_000.0 // より高精度なタイミング制御
+        
         while (isRunning && romLoaded) {
+            val frameStartTime = System.nanoTime() / 1_000_000.0
             val mergedInput = mergeInput(uiInput, InputStateHolder.controllerInput.value)
             when (val result = gameLoop.runSingleFrame(mergedInput)) {
                 is CoreResult.Success -> {
                     frameBuffer = result.value.frameBuffer
                     frameIndex = result.value.stats?.frameIndex ?: 0L
                     errorMessage = null
+                    
+                    // オーディオサンプルを出力
+                    result.value.audioSamples?.let { samples ->
+                        if (audioTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                            audioTrack.write(samples, 0, samples.size)
+                        }
+                    }
+                    
                     frameCount++
                     if (frameCount % 60 == 0) {
                         android.util.Log.d("GameLoop", "Frame $frameCount rendered, buffer size=${frameBuffer?.size}")
@@ -175,7 +227,27 @@ private fun gameScreen(
                     isRunning = false
                 }
             }
-            kotlinx.coroutines.delay(16L)
+            
+            // フレームレートを正確に保つため、実機のフレームレート（59.7275Hz）に合わせる
+            val frameEndTime = System.nanoTime() / 1_000_000.0
+            val elapsed = frameEndTime - frameStartTime
+            val sleepTime = (targetFrameTime - elapsed).coerceAtLeast(0.0)
+            
+            // フレームレートが遅すぎる場合は警告
+            if (elapsed > targetFrameTime * 1.5) {
+                if (frameCount % 60 == 0) {
+                    val actualFps = 1000.0 / elapsed
+                    android.util.Log.w("GameLoop", "Frame rate too slow: ${String.format("%.2f", actualFps)} Hz (target: 59.73 Hz)")
+                }
+            }
+            
+            // より正確なタイミング制御のため、残り時間を待機
+            // フレームレートを正確に保つため、処理時間を考慮して待機時間を調整
+            if (sleepTime > 0.1) { // 0.1ms未満の待機は無視（オーバーヘッドを避ける）
+                kotlinx.coroutines.delay(sleepTime.toLong())
+            }
+            
+            lastFrameTime = frameEndTime
         }
         android.util.Log.d("GameLoop", "Game loop stopped")
     }

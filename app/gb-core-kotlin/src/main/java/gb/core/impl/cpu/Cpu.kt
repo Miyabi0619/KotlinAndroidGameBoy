@@ -130,6 +130,18 @@ class Cpu(
         val pcBefore = registers.pc
         val opcode = bus.readByte(pcBefore).toInt()
 
+        // HALT命令（0x76）の場合は、HALTバグのチェックが必要
+        // HALTバグ: IMEが無効で割り込みがペンディングしている場合、PCが1進んでしまう
+        if (opcode == 0x76 && !interruptMasterEnabled) {
+            val ifReg = bus.readByte(0xFF0Fu.toUShort())
+            if (ifReg != 0u.toUByte()) {
+                // HALTバグ: PCを1進める（実機のバグを再現）
+                registers.pc = (pcBefore.toInt() + 1).toUShort()
+                // HALT状態には入らない
+                return Cycles.NOP
+            }
+        }
+
         // 次の命令に備えて PC を 1 バイト分進める。
         registers.pc = (pcBefore.toInt() + 1).toUShort()
 
@@ -183,7 +195,7 @@ class Cpu(
         // HALT 状態は割り込み受付で解除される
         halted = false
         stopped = false
-        
+
         // ログ出力を削除（パフォーマンス向上のため）
 
         // 現在の PC を戻りアドレスとしてスタックに退避
@@ -1561,8 +1573,8 @@ class Cpu(
      * - オペコード: 0x76
      * - サイクル数: 4
      *
-     * 現時点では「HALT 中は executeInstruction が NOP 相当の 4 サイクルを返す」だけ実装し、
-     * 実際のウェイクアップ（割り込みなど）は後続フェーズで扱う。
+     * 注意: HALTバグのチェックはexecuteInstruction()の先頭で行う
+     * （HALTバグが発生する場合、この関数は呼ばれない）
      */
     private fun executeHalt(): Int {
         halted = true
