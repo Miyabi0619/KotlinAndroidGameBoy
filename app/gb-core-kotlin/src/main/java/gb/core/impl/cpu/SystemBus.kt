@@ -66,6 +66,18 @@ class SystemBus(
 
     private fun readByteInternal(addr: Int): UByte =
         when {
+            // 0x38のアドレスに0xFF（RST 38H）がある場合は、無限ループを防ぐためRETI（0xD9）を返す
+            // これは、ROMの内容が0xFFの場合にのみ適用される（実機では通常RETIが配置される）
+            addr == 0x38 -> {
+                val index = mbc1?.mapRom0(addr) ?: addr
+                val romValue = rom.getOrElse(index) { 0xFFu }
+                // ROMの内容が0xFF（RST 38H）の場合は、RETI（0xD9）を返す
+                if (romValue == 0xFFu.toUByte()) {
+                    0xD9u.toUByte() // RETI命令
+                } else {
+                    romValue
+                }
+            }
             addr in 0x0000..0x3FFF -> {
                 val index = mbc1?.mapRom0(addr) ?: addr
                 rom.getOrElse(index) { 0xFFu }

@@ -51,7 +51,16 @@ class Sound {
     }
 
     // サウンドレジスタ（0xFF10-0xFF3F）
-    private val soundRegs: UByteArray = UByteArray(0x30) { 0u }
+    // 初期値: 実機では、NR52のbit 7は電源ON時に1になる
+    // ただし、他のレジスタは0で初期化される
+    private val soundRegs: UByteArray = UByteArray(0x30) { 
+        if (it == 0x16) {
+            // NR52 (0xFF26) の bit 7 を初期化時に1にする（サウンド有効）
+            0x80u.toUByte()
+        } else {
+            0u
+        }
+    }
     
     // 波形RAM（0xFF30-0xFF3F、Waveチャンネル用）
     private val waveRam: UByteArray = UByteArray(0x10) { 0u }
@@ -59,8 +68,10 @@ class Sound {
     // サウンド生成用の内部状態
     // soundCycleCounterはサウンドサイクル単位（CPUサイクル/8）で管理
     // 浮動小数点で精度を保持
+    // 精度向上のため、定期的に正規化（オーバーフローを防ぐ）
     private var soundCycleCounter: Double = 0.0
     private var frameStartSoundCycle: Double = 0.0 // フレーム開始時点のサウンドサイクル
+    private val MAX_SOUND_CYCLE = 1e9 // 正規化用の最大値（約19時間分）
     
     // チャンネルの内部状態
     private val square1State = SquareChannelState()
@@ -388,18 +399,79 @@ class Sound {
         val soundCyclesDouble = cycles / 8.0
         soundCycleCounter += soundCyclesDouble
         
-        // サウンドサイクル単位に変換（1/8）
-        // チャンネル状態更新には整数値を使用（累積器ベースの実装のため）
-        val soundCycles = cycles / 8
+        // 精度向上のため、定期的に正規化（オーバーフローを防ぐ）
+        // フレーム開始時点も同時に正規化して、相対的な位置を保持
+        if (soundCycleCounter > MAX_SOUND_CYCLE) {
+            val offset = frameStartSoundCycle
+            soundCycleCounter -= offset
+            frameStartSoundCycle = 0.0
+        }
         
-        // 各チャンネルの状態を更新
-        updateSquare1Channel(soundCycles)
-        updateSquare2Channel(soundCycles)
-        updateWaveChannel(soundCycles)
-        updateNoiseChannel(soundCycles)
+        // 長さカウンタのみを更新（エンベロープとスイープはgenerateSamples()で更新）
+        // これにより、サンプル生成のタイミングと同期が取れる
+        val soundCycles = soundCyclesDouble.toInt().coerceAtLeast(0)
+        updateLengthCounters(soundCycles)
+    }
+    
+    /**
+     * 長さカウンタのみを更新（エンベロープとスイープはgenerateSamples()で更新）
+     */
+    private fun updateLengthCounters(soundCycles: Int) {
+        // Square 1の長さカウンタ
+        if (square1State.lengthEnabled && square1State.lengthCounter > 0) {
+            square1State.lengthCounterAccumulator += soundCycles
+            val lengthStep = 2048
+            while (square1State.lengthCounterAccumulator >= lengthStep && square1State.lengthCounter > 0) {
+                square1State.lengthCounterAccumulator -= lengthStep
+                square1State.lengthCounter--
+                if (square1State.lengthCounter <= 0) {
+                    square1State.enabled = false
+                    break
+                }
+            }
+        }
         
-        // Square 1のスイープ処理
-        updateSweep(soundCycles)
+        // Square 2の長さカウンタ
+        if (square2State.lengthEnabled && square2State.lengthCounter > 0) {
+            square2State.lengthCounterAccumulator += soundCycles
+            val lengthStep = 2048
+            while (square2State.lengthCounterAccumulator >= lengthStep && square2State.lengthCounter > 0) {
+                square2State.lengthCounterAccumulator -= lengthStep
+                square2State.lengthCounter--
+                if (square2State.lengthCounter <= 0) {
+                    square2State.enabled = false
+                    break
+                }
+            }
+        }
+        
+        // Waveの長さカウンタ
+        if (waveState.lengthEnabled && waveState.lengthCounter > 0) {
+            waveState.lengthCounterAccumulator += soundCycles
+            val lengthStep = 2048
+            while (waveState.lengthCounterAccumulator >= lengthStep && waveState.lengthCounter > 0) {
+                waveState.lengthCounterAccumulator -= lengthStep
+                waveState.lengthCounter--
+                if (waveState.lengthCounter <= 0) {
+                    waveState.enabled = false
+                    break
+                }
+            }
+        }
+        
+        // Noiseの長さカウンタ
+        if (noiseState.lengthEnabled && noiseState.lengthCounter > 0) {
+            noiseState.lengthCounterAccumulator += soundCycles
+            val lengthStep = 2048
+            while (noiseState.lengthCounterAccumulator >= lengthStep && noiseState.lengthCounter > 0) {
+                noiseState.lengthCounterAccumulator -= lengthStep
+                noiseState.lengthCounter--
+                if (noiseState.lengthCounter <= 0) {
+                    noiseState.enabled = false
+                    break
+                }
+            }
+        }
     }
     
     /**
@@ -419,6 +491,19 @@ class Sound {
         // フレーム開始時点のサウンドサイクルを記録（より正確なタイミング同期）
         // 1フレーム = 70224 CPUサイクル = 70224 / 8 = 8778 サウンドサイクル
         val cyclesPerFrame = 70224 / 8.0
+        
+        // サンプル生成前に、エンベロープとスイープを更新（タイミング同期のため）
+        // 現在のサウンドサイクル位置を整数に変換して更新処理に渡す
+        val currentSoundCycles = (soundCycleCounter - frameStartSoundCycle).toInt().coerceAtLeast(0)
+        if (currentSoundCycles > 0) {
+            // エンベロープとスイープを更新（サンプル生成の前に実行）
+            updateSquare1Channel(currentSoundCycles)
+            updateSquare2Channel(currentSoundCycles)
+            updateWaveChannel(currentSoundCycles)
+            updateNoiseChannel(currentSoundCycles)
+            // Square 1のスイープ処理
+            updateSweep(currentSoundCycles)
+        }
         
         // 最初のフレームでは、現在のカウンタから1フレーム分を引く
         // より正確なタイミング計算のため、フレーム開始時点を正確に記録
@@ -595,7 +680,7 @@ class Sound {
             0 -> 0b00000001 // 12.5% (1/8) - bit 0のみ
             1 -> 0b00000011 // 25% (2/8) - bit 0-1
             2 -> 0b00001111 // 50% (4/8) - bit 0-3
-            3 -> 0b11111100 // 75% (6/8) - bit 2-7
+            3 -> 0b11111100 // 75% (6/8) - bit 2-7（実機の仕様）
             else -> 0b00001111
         }
         
@@ -611,13 +696,16 @@ class Sound {
         // 周期内の位置を0-7の範囲に正規化（より正確な計算）
         // 浮動小数点で計算してから整数に変換することで、精度を向上
         // periodはDouble型なので、浮動小数点の剰余演算を使用
-        val positionInPeriod = soundCycle % period
+        // 精度向上のため、periodが0でないことを確認
+        val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
         // デューティ比の位置を計算（0-7の範囲）
         // より正確な計算のため、浮動小数点を使用
         // 実機では、デューティ比の位置は0-7の整数値で管理される
-        val dutyPositionDouble = (positionInPeriod * 8.0 / period)
+        // 精度向上のため、切り捨てを使用（実機の動作に合わせる）
+        val dutyPositionDouble = if (period > 0) (positionInPeriod * 8.0 / period) else 0.0
         val dutyPosition = dutyPositionDouble.toInt().coerceIn(0, 7)
         // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
+        // 実機では、dutyPositionは0-7の範囲で、dutyPatternの対応するビットをチェック
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
         
         // ボリュームを適用（0-15を0-32767にスケール）
@@ -661,7 +749,7 @@ class Sound {
             0 -> 0b00000001 // 12.5% (1/8)
             1 -> 0b00000011 // 25% (2/8)
             2 -> 0b00001111 // 50% (4/8)
-            3 -> 0b11111100 // 75% (6/8)
+            3 -> 0b11111100 // 75% (6/8) - bit 2-7（実機の仕様）
             else -> 0b00001111
         }
         
@@ -676,10 +764,13 @@ class Sound {
         // 波形を生成
         // 浮動小数点で計算してから整数に変換することで、精度を向上
         // periodはDouble型なので、浮動小数点の剰余演算を使用
-        val positionInPeriod = soundCycle % period
+        // 精度向上のため、periodが0でないことを確認
+        val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
         // デューティ比の位置を計算（0-7の範囲）
-        val dutyPositionDouble = (positionInPeriod * 8.0 / period)
+        // 精度向上のため、切り捨てを使用（実機の動作に合わせる）
+        val dutyPositionDouble = if (period > 0) (positionInPeriod * 8.0 / period) else 0.0
         val dutyPosition = dutyPositionDouble.toInt().coerceIn(0, 7)
+        // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
         
         // ボリュームを適用（0-15を0-32767にスケール）
@@ -731,26 +822,11 @@ class Sound {
     }
     
     /**
-     * Square 1チャンネルの状態を更新
+     * Square 1チャンネルの状態を更新（エンベロープのみ）
+     * 長さカウンタはupdateLengthCounters()で更新される
      */
     private fun updateSquare1Channel(soundCycles: Int) {
-        val nr11 = soundRegs[0x01]
         val nr12 = soundRegs[0x02]
-        val nr14 = soundRegs[0x04]
-        
-        // 長さカウンタの更新（256Hz = 524288 / 256 = 2048サウンドサイクルごと）
-        if (square1State.lengthEnabled && square1State.lengthCounter > 0) {
-            square1State.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (square1State.lengthCounterAccumulator >= lengthStep && square1State.lengthCounter > 0) {
-                square1State.lengthCounterAccumulator -= lengthStep
-                square1State.lengthCounter--
-                if (square1State.lengthCounter <= 0) {
-                    square1State.enabled = false
-                    break
-                }
-            }
-        }
         
         // エンベロープの更新（64Hz = 524288 / 64 = 8192サウンドサイクルごと）
         // 実機では、エンベロープのperiodが0の場合、エンベロープは無効になり、初期ボリュームがそのまま使われる
@@ -774,26 +850,11 @@ class Sound {
     }
     
     /**
-     * Square 2チャンネルの状態を更新
+     * Square 2チャンネルの状態を更新（エンベロープのみ）
+     * 長さカウンタはupdateLengthCounters()で更新される
      */
     private fun updateSquare2Channel(soundCycles: Int) {
-        val nr21 = soundRegs[0x05]
         val nr22 = soundRegs[0x06]
-        val nr24 = soundRegs[0x08]
-        
-        // 長さカウンタの更新（256Hz = 2048サウンドサイクルごと）
-        if (square2State.lengthEnabled && square2State.lengthCounter > 0) {
-            square2State.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (square2State.lengthCounterAccumulator >= lengthStep && square2State.lengthCounter > 0) {
-                square2State.lengthCounterAccumulator -= lengthStep
-                square2State.lengthCounter--
-                if (square2State.lengthCounter <= 0) {
-                    square2State.enabled = false
-                    break
-                }
-            }
-        }
         
         // エンベロープの更新（64Hz = 8192サウンドサイクルごと）
         // 実機では、エンベロープのperiodが0の場合、エンベロープは無効になり、初期ボリュームがそのまま使われる
@@ -816,52 +877,23 @@ class Sound {
     }
     
     /**
-     * Waveチャンネルの状態を更新
+     * Waveチャンネルの状態を更新（現在は何もしない）
+     * 長さカウンタはupdateLengthCounters()で更新される
+     * 波形位置はサンプル生成時に直接計算するため、ここでは更新しない
      */
     private fun updateWaveChannel(soundCycles: Int) {
-        val nr33 = soundRegs[0x0D] // NR33 (Frequency Low)
-        val nr34 = soundRegs[0x0E] // NR34 (Frequency High & Trigger)
-        
-        // 長さカウンタの更新（256Hz = 2048サウンドサイクルごと）
-        if (waveState.lengthEnabled && waveState.lengthCounter > 0) {
-            waveState.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (waveState.lengthCounterAccumulator >= lengthStep && waveState.lengthCounter > 0) {
-                waveState.lengthCounterAccumulator -= lengthStep
-                waveState.lengthCounter--
-                if (waveState.lengthCounter <= 0) {
-                    waveState.enabled = false
-                    break
-                }
-            }
-        }
-        
         // 波形位置の更新（周波数に基づく）
         // 注意: 波形位置はサンプル生成時に直接計算するため、ここでは更新しない
         // 実機では、波形位置は周波数に基づいて自動的に更新される
     }
     
     /**
-     * Noiseチャンネルの状態を更新
+     * Noiseチャンネルの状態を更新（エンベロープとLFSRのみ）
+     * 長さカウンタはupdateLengthCounters()で更新される
      */
     private fun updateNoiseChannel(soundCycles: Int) {
         val nr42 = soundRegs[0x11]
         val nr43 = soundRegs[0x12]
-        val nr44 = soundRegs[0x13]
-        
-        // 長さカウンタの更新（256Hz = 2048サウンドサイクルごと）
-        if (noiseState.lengthEnabled && noiseState.lengthCounter > 0) {
-            noiseState.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (noiseState.lengthCounterAccumulator >= lengthStep && noiseState.lengthCounter > 0) {
-                noiseState.lengthCounterAccumulator -= lengthStep
-                noiseState.lengthCounter--
-                if (noiseState.lengthCounter <= 0) {
-                    noiseState.enabled = false
-                    break
-                }
-            }
-        }
         
         // エンベロープの更新（64Hz = 8192サウンドサイクルごと）
         val envelopePeriod = nr42.toInt() and 0x07
@@ -963,11 +995,12 @@ class Sound {
         // より正確な計算のため、浮動小数点を使用
         // 実機では、波形位置は連続的に更新される
         // 周期内の位置を計算（0.0 ～ period の範囲）
-        val position = soundCycle % period
+        // 精度向上のため、periodが0でないことを確認
+        val position = if (period > 0) (soundCycle % period) else 0.0
         // 32サンプルの波形なので、位置を0-31の範囲に正規化
         // より正確な計算のため、浮動小数点で計算してから整数に変換
-        val sampleIndexDouble = (position * 32.0 / period)
-        // 四捨五入ではなく切り捨てを使用（実機の動作に合わせる）
+        // 精度向上のため、切り捨てを使用（実機の動作に合わせる）
+        val sampleIndexDouble = if (period > 0) (position * 32.0 / period) else 0.0
         val sampleIndex = sampleIndexDouble.toInt().coerceIn(0, 31)
         
         // 波形RAMからサンプルを読み取り（16バイト = 32サンプル）
