@@ -332,22 +332,28 @@ class Ppu(
             }
         }
         
+        // 最適化: 型変換と計算を削減（スコープ外で定義）
+        val vramSize = vram.size
+        val whiteColor = 0xFFFFFFFF.toInt()
+        
         if (bgEnabled) {
+            
             for (y in 0 until SCREEN_HEIGHT) {
                 // スクロールYを考慮した背景Y座標
                 val bgY = (y + scyInt) and 0xFF
-                val tileRow = bgY / 8
-                val rowInTile = bgY % 8
+                val tileRow = bgY shr 3 // / 8 をビットシフトに置き換え
+                val rowInTile = bgY and 0x07 // % 8 をビット演算に置き換え
+                val rowInTile2 = rowInTile shl 1 // rowInTile * 2
 
                 for (x in 0 until SCREEN_WIDTH) {
                     // スクロールXを考慮した背景X座標
                     val bgX = (x + scxInt) and 0xFF
-                    val tileCol = bgX / 8
-                    val colInTile = bgX % 8
+                    val tileCol = bgX shr 3 // / 8 をビットシフトに置き換え
+                    val colInTile = bgX and 0x07 // % 8 をビット演算に置き換え
 
                     // 32x32タイルマップなので、モジュロ演算でラップアラウンド
-                    val bgIndex = bgMapBase + (tileRow % 32) * BG_MAP_WIDTH + (tileCol % 32)
-                    val tileIndexByte = if (bgIndex < vram.size) vram[bgIndex] else 0u
+                    val bgIndex = bgMapBase + (tileRow and 0x1F) * BG_MAP_WIDTH + (tileCol and 0x1F)
+                    val tileIndexByte = if (bgIndex < vramSize) vram[bgIndex] else 0u
 
                     // タイルインデックスの計算
                     val tileIndex =
@@ -361,12 +367,11 @@ class Ppu(
                         }
 
                     // タイルデータは 0x8000 から、1 タイル 16 バイト
-                    val tileBase = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES
-                    val lineAddr = tileBase + rowInTile * 2
+                    val lineAddr = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES + rowInTile2
 
                     // 範囲チェックを事前に行う（getOrElseのオーバーヘッドを削減）
-                    val low = if (lineAddr < vram.size) vram[lineAddr].toInt() else 0
-                    val high = if (lineAddr + 1 < vram.size) vram[lineAddr + 1].toInt() else 0
+                    val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
+                    val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
 
                     val bit = 7 - colInTile
                     val colorId =
@@ -381,13 +386,9 @@ class Ppu(
             }
         } else {
             // 背景が無効な場合は、すべて白で塗りつぶし、カラーIDは0
-            for (y in 0 until SCREEN_HEIGHT) {
-                for (x in 0 until SCREEN_WIDTH) {
-                    val pixelIndex = y * SCREEN_WIDTH + x
-                    pixels[pixelIndex] = 0xFFFFFFFF.toInt()
-                    bgColorIds[pixelIndex] = 0u
-                }
-            }
+            // 最適化: fillを使用して高速化
+            pixels.fill(whiteColor)
+            bgColorIds.fill(0u)
         }
 
         // ウィンドウ描画（背景の上、スプライトの下に描画）
@@ -449,21 +450,25 @@ class Ppu(
 
         // ウィンドウ内の各ピクセルを描画
         // ウィンドウは画面の特定の領域にのみ描画される
+        // 最適化: 型変換と計算を削減
+        val vramSize = vram.size
+        
         for (y in windowStartY until SCREEN_HEIGHT) {
             // ウィンドウ内のY座標（ウィンドウのタイルマップ内での位置）
             val windowY = y - windowStartY
-            val tileRow = windowY / 8
-            val rowInTile = windowY % 8
+            val tileRow = windowY shr 3 // / 8 をビットシフトに置き換え
+            val rowInTile = windowY and 0x07 // % 8 をビット演算に置き換え
+            val rowInTile2 = rowInTile shl 1 // rowInTile * 2
 
             for (x in windowStartX until SCREEN_WIDTH) {
                 // ウィンドウ内のX座標（ウィンドウのタイルマップ内での位置）
                 val windowX = x - windowStartX
-                val tileCol = windowX / 8
-                val colInTile = windowX % 8
+                val tileCol = windowX shr 3 // / 8 をビットシフトに置き換え
+                val colInTile = windowX and 0x07 // % 8 をビット演算に置き換え
 
                 // 32x32タイルマップなので、モジュロ演算でラップアラウンド
-                val windowIndex = windowMapBase + (tileRow % 32) * BG_MAP_WIDTH + (tileCol % 32)
-                val tileIndexByte = if (windowIndex < vram.size) vram[windowIndex] else 0u
+                val windowIndex = windowMapBase + (tileRow and 0x1F) * BG_MAP_WIDTH + (tileCol and 0x1F)
+                val tileIndexByte = if (windowIndex < vramSize) vram[windowIndex] else 0u
 
                 // タイルインデックスの計算
                 val tileIndex =
@@ -477,12 +482,11 @@ class Ppu(
                     }
 
                 // タイルデータは 0x8000 から、1 タイル 16 バイト
-                val tileBase = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES
-                val lineAddr = tileBase + rowInTile * 2
+                val lineAddr = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES + rowInTile2
 
                 // 範囲チェックを事前に行う（getOrElseのオーバーヘッドを削減）
-                val low = if (lineAddr < vram.size) vram[lineAddr].toInt() else 0
-                val high = if (lineAddr + 1 < vram.size) vram[lineAddr + 1].toInt() else 0
+                val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
+                val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
 
                 val bit = 7 - colInTile
                 val colorId =
@@ -542,6 +546,10 @@ class Ppu(
         }
         
         // 各スキャンラインで、そのラインに表示されるスプライトを検索して描画
+        // 最適化: 型変換と計算を削減
+        val vramSize = vram.size
+        val oamSize = oam.size
+        
         for (y in 0 until SCREEN_HEIGHT) {
             val spritesOnLine = mutableListOf<Int>()
 
@@ -549,8 +557,8 @@ class Ppu(
             for (i in 0 until 40) {
                 if (spritesOnLine.size >= 10) break
 
-                val oamIndex = i * 4
-                if (oamIndex + 1 >= oam.size) continue
+                val oamIndex = i shl 2 // i * 4 をビットシフトに置き換え
+                if (oamIndex + 1 >= oamSize) continue
                 val spriteY = oam[oamIndex].toInt() - 16
                 val spriteX = oam[oamIndex + 1].toInt() - 8
 
@@ -562,9 +570,9 @@ class Ppu(
 
             // スプライトを描画（OAMの順序（インデックス昇順）で描画：実機の仕様に準拠）
             // 後から描画されたスプライトが前に描画されたスプライトの上に描画される
-            spritesOnLine.forEach { i ->
-                val oamIndex = i * 4
-                if (oamIndex + 3 >= oam.size) return@forEach
+            for (i in spritesOnLine) {
+                val oamIndex = i shl 2 // i * 4 をビットシフトに置き換え
+                if (oamIndex + 3 >= oamSize) continue
                 val spriteY = oam[oamIndex].toInt() - 16
                 val spriteX = oam[oamIndex + 1].toInt() - 8
                 val tileIndex = oam[oamIndex + 2].toInt()
@@ -585,14 +593,13 @@ class Ppu(
                     } else {
                         tileIndex
                     }
-                val tileRow = actualRow % 8
+                val tileRow = actualRow and 0x07 // % 8 をビット演算に置き換え
 
-                val tileBase = TILE_DATA_BASE + actualTileIndex * TILE_SIZE_BYTES
-                val lineAddr = tileBase + tileRow * 2
+                val lineAddr = TILE_DATA_BASE + actualTileIndex * TILE_SIZE_BYTES + (tileRow shl 1) // tileRow * 2
 
                 // 範囲チェックを事前に行う（getOrElseのオーバーヘッドを削減）
-                val low = if (lineAddr < vram.size) vram[lineAddr].toInt() else 0
-                val high = if (lineAddr + 1 < vram.size) vram[lineAddr + 1].toInt() else 0
+                val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
+                val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
 
                 for (x in 0 until 8) {
                     val screenX = spriteX + x
@@ -610,12 +617,8 @@ class Ppu(
 
                     // 優先度チェック：優先度が高い（bit7=1）場合、背景/ウィンドウのカラーID 0以外の上には描画しない
                     // 実機の仕様：優先度が高いスプライトは、背景/ウィンドウの透明部分（カラーID 0）の上にのみ描画される
-                    if (priority) {
-                        val bgColorId = bgColorIds[pixelIndex]
-                        // 背景/ウィンドウのカラーIDが0以外の場合は描画しない
-                        if (bgColorId != 0u.toUByte()) {
-                            continue
-                        }
+                    if (priority && bgColorIds[pixelIndex] != 0u.toUByte()) {
+                        continue
                     }
 
                     // ルックアップテーブルを使用（関数呼び出しのオーバーヘッドを削減）

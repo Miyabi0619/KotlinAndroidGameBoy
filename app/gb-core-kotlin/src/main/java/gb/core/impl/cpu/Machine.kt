@@ -17,7 +17,7 @@ class Machine(
     private val joypad = Joypad(interruptController)
     val sound: Sound = Sound()
 
-    private val bus: SystemBus
+    val bus: SystemBus
 
     val cpu: Cpu
     val ppu: Ppu

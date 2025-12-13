@@ -151,10 +151,10 @@ private fun gameScreen(
             },
         )
 
-    // オーディオ出力の初期化
+    // オーディオ出力の初期化（ステレオ形式）
     val audioTrack = remember {
         val sampleRate = 44100
-        val channelConfig = AudioFormat.CHANNEL_OUT_MONO
+        val channelConfig = AudioFormat.CHANNEL_OUT_STEREO // ステレオ出力に変更
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
         val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
         
@@ -196,29 +196,69 @@ private fun gameScreen(
         }
         android.util.Log.d("GameLoop", "Game loop started")
         var frameCount = 0
+        var skippedFrames = 0
         // フレームレート制御用の変数
         val targetFrameTime = 1000.0 / 59.7275 // 約16.74ms（実機のフレームレート）
         var lastFrameTime = System.nanoTime() / 1_000_000.0 // より高精度なタイミング制御
+        var audioBufferSize = 0 // 音声バッファのサイズを追跡
         
         while (isRunning && romLoaded) {
             val frameStartTime = System.nanoTime() / 1_000_000.0
+            
+            // フレームスキップ判定：処理が遅れている場合は描画をスキップ
+            // ただし、音声は常に処理してタイミングを保つ
+            // スキップは極力避ける（ゲームの可玩性を保つため）
+            val timeSinceLastFrame = if (frameCount > 0) {
+                frameStartTime - lastFrameTime
+            } else {
+                targetFrameTime // 最初のフレームはスキップしない
+            }
+            // フレームスキップを大幅に削減：スキップ率が高すぎる場合は無効化
+            val skipRate = if (frameCount > 0) (skippedFrames * 100.0 / frameCount) else 0.0
+            // スキップ率が20%を超える場合は、スキップを無効化（ゲームの可玩性を保つため）
+            val shouldSkipRender = skipRate < 20.0 && 
+                                   timeSinceLastFrame < targetFrameTime * 0.2 && 
+                                   frameCount > 30 // 最初の30フレームはスキップしない
+            
             val mergedInput = mergeInput(uiInput, InputStateHolder.controllerInput.value)
             when (val result = gameLoop.runSingleFrame(mergedInput)) {
                 is CoreResult.Success -> {
-                    frameBuffer = result.value.frameBuffer
-                    frameIndex = result.value.stats?.frameIndex ?: 0L
-                    errorMessage = null
-                    
-                    // オーディオサンプルを出力
+                    // オーディオサンプルは常に出力（タイミングを保つため）
                     result.value.audioSamples?.let { samples ->
                         if (audioTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                            audioTrack.write(samples, 0, samples.size)
+                            val written = audioTrack.write(samples, 0, samples.size)
+                            audioBufferSize += samples.size - written
+                            
+                            // バッファが溜まりすぎている場合は警告
+                            if (audioBufferSize > samples.size * 10) {
+                                if (frameCount % 300 == 0) {
+                                    android.util.Log.w("GameLoop", "Audio buffer overflow: $audioBufferSize samples")
+                                }
+                                audioBufferSize = samples.size * 5 // リセット
+                            }
                         }
                     }
                     
+                    // 描画はスキップ判定に基づいて処理
+                    if (!shouldSkipRender) {
+                        frameBuffer = result.value.frameBuffer
+                        frameIndex = result.value.stats?.frameIndex ?: 0L
+                    } else {
+                        skippedFrames++
+                    }
+                    
+                    errorMessage = null
                     frameCount++
-                    if (frameCount % 60 == 0) {
-                        android.util.Log.d("GameLoop", "Frame $frameCount rendered, buffer size=${frameBuffer?.size}")
+                    
+                    if (frameCount % 300 == 0) {
+                        val actualFps = 1000.0 / (timeSinceLastFrame.coerceAtLeast(0.1))
+                        val skipRate = if (frameCount > 0) (skippedFrames * 100.0 / frameCount) else 0.0
+                        android.util.Log.d(
+                            "GameLoop",
+                            "Frame $frameCount: FPS=${String.format("%.2f", actualFps)}, " +
+                                "skipped=${skippedFrames} (${String.format("%.1f", skipRate)}%), " +
+                                "audioBuffer=${audioBufferSize}"
+                        )
                     }
                 }
                 is CoreResult.Error -> {
@@ -235,7 +275,7 @@ private fun gameScreen(
             
             // フレームレートが遅すぎる場合は警告
             if (elapsed > targetFrameTime * 1.5) {
-                if (frameCount % 60 == 0) {
+                if (frameCount % 300 == 0) {
                     val actualFps = 1000.0 / elapsed
                     android.util.Log.w("GameLoop", "Frame rate too slow: ${String.format("%.2f", actualFps)} Hz (target: 59.73 Hz)")
                 }
@@ -243,7 +283,8 @@ private fun gameScreen(
             
             // より正確なタイミング制御のため、残り時間を待機
             // フレームレートを正確に保つため、処理時間を考慮して待機時間を調整
-            if (sleepTime > 0.1) { // 0.1ms未満の待機は無視（オーバーヘッドを避ける）
+            // ただし、処理が遅れている場合は待機しない（フレームスキップで対応）
+            if (sleepTime > 0.1 && elapsed < targetFrameTime * 1.2) {
                 kotlinx.coroutines.delay(sleepTime.toLong())
             }
             

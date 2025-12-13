@@ -89,11 +89,45 @@ class Sound {
         
         // 波形RAM（0xFF30-0xFF3F）の読み取り
         if (offset >= 0x20) {
-            // 実機では、Waveチャンネルが有効な場合、波形RAMの読み取りも制限される
-            // ただし、実機の動作は複雑で、正確には「Waveチャンネルが再生中の場合、波形RAMは読み取り専用になる」
-            // 簡易実装として、Waveチャンネルが有効な場合は、最後に書き込まれた値を返す
-            // （実機では、Waveチャンネルが有効な場合、波形RAMは読み取り専用になるが、値は保持される）
-            return waveRam[offset - 0x20]
+            // 実機の仕様: Waveチャンネルが有効で再生中の場合、波形RAMの読み取りは制限される
+            // 実機では、Waveチャンネルが再生中の場合、波形RAMの読み取りは現在再生中のサンプル位置の値が返される
+            // より正確には、波形RAMの読み取りは、現在再生中のサンプル位置に基づいて制限される
+            if (waveState.enabled) {
+                // Waveチャンネルが再生中の場合、波形RAMの読み取りは現在再生中のサンプル位置の値が返される
+                // 実機の動作: 波形RAMの読み取りは、現在再生中のサンプル位置（32サンプル中）に基づいて制限される
+                // 実機では、波形RAMの読み取りは、現在再生中のサンプル位置のバイトが返される
+                // より正確な実装のため、現在再生中のサンプル位置を計算
+                val nr33 = soundRegs[0x0D] // NR33 (Frequency Low)
+                val nr34 = soundRegs[0x0E] // NR34 (Frequency High & Trigger)
+                val frequency = ((nr34.toInt() and 0x07) shl 8) or nr33.toInt()
+                
+                if (frequency > 0 && frequency < 2048) {
+                    // 周期を計算
+                    val period = (2048.0 - frequency) * 8.0
+                    if (period > 0) {
+                        // 現在再生中のサンプル位置を計算（32サンプル中）
+                        // soundCycleCounterから現在の位置を計算
+                        val position = (soundCycleCounter % period) * 32.0 / period
+                        val sampleIndex = position.toInt().coerceIn(0, 31)
+                        
+                        // 現在再生中のサンプル位置のバイトインデックス
+                        val currentByteIndex = (sampleIndex / 2).coerceIn(0, 15)
+                        
+                        // 読み取りオフセットに対応するバイトインデックス
+                        val readByteIndex = offset - 0x20
+                        
+                        // 実機の動作: 波形RAMの読み取りは、現在再生中のサンプル位置のバイトが返される
+                        // より正確には、読み取りオフセットが現在再生中のサンプル位置と一致する場合、その値を返す
+                        // 実機では、波形RAMの読み取りは、現在再生中のサンプル位置のバイトが返される
+                        return waveRam[currentByteIndex]
+                    }
+                }
+                // 周波数が無効な場合、通常の読み取りを返す
+                return waveRam[offset - 0x20]
+            } else {
+                // Waveチャンネルが無効な場合、通常の読み取りを返す
+                return waveRam[offset - 0x20]
+            }
         }
         
         // NR52 (Sound Control) の読み取り時、各チャンネルの有効状態を反映
@@ -332,6 +366,12 @@ class Sound {
                 sweepPeriod = ((value.toInt() shr 4) and 0x07)
                 sweepNegate = (value.toInt() and 0x08) != 0
                 sweepShift = value.toInt() and 0x07
+                // スイープが無効な場合（period == 0 かつ shift == 0）でも、shadowFrequencyをレジスタから更新
+                if (sweepPeriod == 0 && sweepShift == 0) {
+                    val nr13 = soundRegs[0x03]
+                    val nr14 = soundRegs[0x04]
+                    shadowFrequency = ((nr14.toInt() and 0x07) shl 8) or nr13.toInt()
+                }
             }
         }
     }
@@ -344,9 +384,12 @@ class Sound {
     fun step(cycles: Int) {
         // サウンド処理はCPU周波数の1/8で動作
         // soundCycleCounterはサウンドサイクル単位で管理（浮動小数点で精度を保持）
-        soundCycleCounter += cycles / 8.0
+        // より正確なタイミング同期のため、浮動小数点で累積
+        val soundCyclesDouble = cycles / 8.0
+        soundCycleCounter += soundCyclesDouble
         
         // サウンドサイクル単位に変換（1/8）
+        // チャンネル状態更新には整数値を使用（累積器ベースの実装のため）
         val soundCycles = cycles / 8
         
         // 各チャンネルの状態を更新
@@ -360,20 +403,20 @@ class Sound {
     }
     
     /**
-     * 1フレーム分のオーディオサンプルを生成する。
+     * 1フレーム分のオーディオサンプルを生成する（ステレオ形式）。
      *
-     * @return 16bit PCMサンプル配列（約735サンプル）
+     * @return 16bit PCMサンプル配列（ステレオ形式、左右交互、約735サンプル×2）
      */
     fun generateSamples(): ShortArray {
         val nr52 = soundRegs[0x16] // NR52 (Sound Control)
         val soundEnabled = (nr52.toInt() and 0x80) != 0
         
         if (!soundEnabled) {
-            // サウンドが無効な場合は無音を返す
-            return ShortArray(SAMPLES_PER_FRAME) { 0 }
+            // サウンドが無効な場合は無音を返す（ステレオ形式）
+            return ShortArray(SAMPLES_PER_FRAME * 2) { 0 }
         }
         
-        // フレーム開始時点のサウンドサイクルを記録
+        // フレーム開始時点のサウンドサイクルを記録（より正確なタイミング同期）
         // 1フレーム = 70224 CPUサイクル = 70224 / 8 = 8778 サウンドサイクル
         val cyclesPerFrame = 70224 / 8.0
         
@@ -383,14 +426,14 @@ class Sound {
             // 最初のフレームでは、現在のカウンタから1フレーム分を引く
             soundCycleCounter - cyclesPerFrame
         } else {
-            // 前回のフレーム開始時点を使用
+            // 前回のフレーム開始時点を使用（タイミング同期のため）
             frameStartSoundCycle
         }
         
         // 次のフレームの開始時点を更新（現在のカウンタ位置）
         // 実際のフレームサイクル数に基づいて更新（より正確に）
         // 1フレーム = 70224 CPUサイクル = 70224 / 8 = 8778 サウンドサイクル
-        // 正確なフレームサイクル数を使用
+        // 正確なフレームサイクル数を使用（タイミング同期のため）
         frameStartSoundCycle = soundCycleCounter
         
         // 各サンプルごとに生成
@@ -400,14 +443,16 @@ class Sound {
         // 1サンプルあたりのサウンドサイクル数 = 524288 / 44100 ≈ 11.89
         val soundCyclesPerSample = (CPU_FREQUENCY / 8.0) / SAMPLE_RATE
         
-        // 常に正確な数のサンプルを生成（フレームレートに基づく）
-        val samples = ShortArray(SAMPLES_PER_FRAME)
+        // ステレオ形式（左右交互）のサンプル配列
+        val samples = ShortArray(SAMPLES_PER_FRAME * 2)
         
         // レジスタ読み取りをループ外に移動（パフォーマンス向上）
         val nr50 = soundRegs[0x14] // NR50 (Master Volume)
         val nr51 = soundRegs[0x15] // NR51 (Channel Select)
         val leftVolume = ((nr50.toInt() shr 4) and 0x07) + 1
         val rightVolume = (nr50.toInt() and 0x07) + 1
+        val vinToLeft = (nr50.toInt() and 0x08) != 0  // Bit 3: SO1端子へのVin出力
+        val vinToRight = (nr50.toInt() and 0x80) != 0 // Bit 7: SO2端子へのVin出力
         val nr51Int = nr51.toInt()
         
         // チャンネルの有効性を事前にチェック（ループ内の条件分岐を削減）
@@ -428,10 +473,15 @@ class Sound {
         val noiseRight = (nr51Int and 0x08) != 0  // Bit 3
         
         // 各チャンネルからサンプルを生成してミキシング
-        for (i in samples.indices) {
+        // 最適化: ループ内の計算を削減、条件分岐を最適化
+        var sampleIndex = 0
+        var soundCycleOffset = 0.0
+        
+        for (i in 0 until SAMPLES_PER_FRAME) {
             // このサンプルのタイミング（サウンドサイクル単位）
-            // フレーム開始時点からの相対的な位置を計算（浮動小数点で精度を保持）
-            val sampleSoundCycle = currentFrameStart + i * soundCyclesPerSample
+            // 最適化: 加算のみで計算（乗算を削減）
+            val sampleSoundCycle = currentFrameStart + soundCycleOffset
+            soundCycleOffset += soundCyclesPerSample
             
             // 各チャンネルからサンプルを生成
             // オーバーフローを防ぐため、Long型で累積してからクリップ
@@ -439,29 +489,29 @@ class Sound {
             var rightMixed: Long = 0
             
             // Square 1チャンネル
-            // 実機では、チャンネルが有効で、かつNR51で有効化されている場合のみ出力
-            if (square1Enabled && (square1Left || square1Right)) {
+            // 最適化: 条件分岐を削減
+            if (square1Enabled) {
                 val square1Sample = generateSquare1Sample(sampleSoundCycle)
                 if (square1Left) leftMixed += square1Sample
                 if (square1Right) rightMixed += square1Sample
             }
             
             // Square 2チャンネル
-            if (square2Enabled && (square2Left || square2Right)) {
+            if (square2Enabled) {
                 val square2Sample = generateSquare2Sample(sampleSoundCycle)
                 if (square2Left) leftMixed += square2Sample
                 if (square2Right) rightMixed += square2Sample
             }
             
             // Waveチャンネル
-            if (waveEnabled && (waveLeft || waveRight)) {
+            if (waveEnabled) {
                 val waveSample = generateWaveSample(sampleSoundCycle)
                 if (waveLeft) leftMixed += waveSample
                 if (waveRight) rightMixed += waveSample
             }
             
             // Noiseチャンネル
-            if (noiseEnabled && (noiseLeft || noiseRight)) {
+            if (noiseEnabled) {
                 val noiseSample = generateNoiseSample(sampleSoundCycle)
                 if (noiseLeft) leftMixed += noiseSample
                 if (noiseRight) rightMixed += noiseSample
@@ -474,13 +524,24 @@ class Sound {
             leftMixed = (leftMixed * leftVolume) / 8
             rightMixed = (rightMixed * rightVolume) / 8
             
-            // ステレオミキシング（簡易実装：モノラルとして出力）
-            // 実機では、左右のチャンネルを別々に出力するが、ここでは平均を取る
-            // オーバーフローを防ぐため、Long型で計算してからクリップ
-            val mixed = ((leftMixed + rightMixed) / 2).coerceIn(-32768, 32767)
+            // Vin入力は実機では通常使用されないため、処理をスキップ（最適化）
             
-            // ミキシング結果を16bitにクリップ
-            samples[i] = mixed.toInt().toShort()
+            // ステレオ出力（左右を別々に出力）
+            // 最適化: coerceInの結果を直接使用
+            val leftSample = when {
+                leftMixed < -32768L -> -32768
+                leftMixed > 32767L -> 32767
+                else -> leftMixed.toInt()
+            }.toShort()
+            val rightSample = when {
+                rightMixed < -32768L -> -32768
+                rightMixed > 32767L -> 32767
+                else -> rightMixed.toInt()
+            }.toShort()
+            
+            // ステレオ形式（左右交互）で出力
+            samples[sampleIndex++] = leftSample
+            samples[sampleIndex++] = rightSample
         }
         
         return samples
@@ -501,7 +562,19 @@ class Sound {
         
         // 周波数を計算（11bit値）
         // スイープ処理で更新されたshadowFrequencyを使用
-        val frequency = shadowFrequency
+        // ただし、スイープが無効な場合はレジスタから直接読み取る
+        val nr10 = soundRegs[0x00]
+        val sweepPeriod = ((nr10.toInt() shr 4) and 0x07)
+        val sweepShift = nr10.toInt() and 0x07
+        val frequency = if (sweepPeriod == 0 && sweepShift == 0) {
+            // スイープが無効な場合、レジスタから直接読み取る
+            val nr13 = soundRegs[0x03]
+            val nr14 = soundRegs[0x04]
+            ((nr14.toInt() and 0x07) shl 8) or nr13.toInt()
+        } else {
+            // スイープが有効な場合、shadowFrequencyを使用
+            shadowFrequency
+        }
         // 周波数が0または2048以上の場合、無効
         if (frequency == 0 || frequency >= 2048) {
             return 0
@@ -541,8 +614,10 @@ class Sound {
         val positionInPeriod = soundCycle % period
         // デューティ比の位置を計算（0-7の範囲）
         // より正確な計算のため、浮動小数点を使用
+        // 実機では、デューティ比の位置は0-7の整数値で管理される
         val dutyPositionDouble = (positionInPeriod * 8.0 / period)
         val dutyPosition = dutyPositionDouble.toInt().coerceIn(0, 7)
+        // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
         
         // ボリュームを適用（0-15を0-32767にスケール）
@@ -806,15 +881,22 @@ class Sound {
         
         // LFSRの更新（ノイズ生成）
         if (noiseState.enabled) {
-            val divisor = when (nr43.toInt() and 0x07) {
-                0 -> 8
-                else -> (nr43.toInt() and 0x07) * 16
-            }
-            val shift = (nr43.toInt() shr 4) and 0x0F
-            // 周期 = (divisor << shift) * 8 サウンドサイクル
-            // ただし、shiftが大きすぎる場合は制限
-            val period = if (shift < 16) {
-                (divisor shl shift) * 8L
+            // 仕様書: 周波数 = 524288 Hz / r / 2^(s+1)
+            // r = 0の場合、r = 0.5が代わりに使われる
+            // 周期 = r * 2^(s+1) / 524288 秒
+            // サウンドサイクル単位: r * 2^(s+1) * 8
+            val r = nr43.toInt() and 0x07
+            val s = (nr43.toInt() shr 4) and 0x0F
+            // 周期を計算（ただし、shiftが大きすぎる場合は制限）
+            val period = if (s < 16) {
+                if (r == 0) {
+                    // r = 0の場合、r = 0.5が代わりに使われる
+                    // 周期 = 0.5 * 2^(s+1) * 8 = 2^s * 8
+                    (1L shl s) * 8L
+                } else {
+                    // r != 0の場合、周期 = r * 2^(s+1) * 8
+                    r.toLong() * (1L shl (s + 1)) * 8L
+                }
             } else {
                 0L // 無効な値
             }
@@ -867,16 +949,25 @@ class Sound {
         }
         
         // 周期を計算
+        // 仕様書: 周波数 = 4,194,304 / (64 * (2048 - x)) Hz = 65536 / (2048 - x) Hz
+        // Squareチャンネル（131072 / (2048 - x) Hz）の半分の周波数
+        // サウンド周波数はCPU周波数の1/8なので、周期 = (2048 - frequency) * 16.0 サウンドサイクル
+        // （Squareチャンネルの2倍の周期）
         // より正確な計算のため、浮動小数点を使用
-        val period = (2048.0 - frequency) * 8.0
+        val period = (2048.0 - frequency) * 16.0
         if (period <= 0) {
             return 0
         }
         
         // 波形位置を計算（32サンプルの波形）
         // より正確な計算のため、浮動小数点を使用
+        // 実機では、波形位置は連続的に更新される
+        // 周期内の位置を計算（0.0 ～ period の範囲）
         val position = soundCycle % period
+        // 32サンプルの波形なので、位置を0-31の範囲に正規化
+        // より正確な計算のため、浮動小数点で計算してから整数に変換
         val sampleIndexDouble = (position * 32.0 / period)
+        // 四捨五入ではなく切り捨てを使用（実機の動作に合わせる）
         val sampleIndex = sampleIndexDouble.toInt().coerceIn(0, 31)
         
         // 波形RAMからサンプルを読み取り（16バイト = 32サンプル）
@@ -918,14 +1009,22 @@ class Sound {
         }
         
         // 周波数を計算
-        val divisor = when (nr43.toInt() and 0x07) {
-            0 -> 8
-            else -> (nr43.toInt() and 0x07) * 16
-        }
-        val shift = (nr43.toInt() shr 4) and 0x0F
+        // 仕様書: 周波数 = 524288 Hz / r / 2^(s+1)
+        // r = 0の場合、r = 0.5が代わりに使われる
+        // 周期 = r * 2^(s+1) / 524288 秒
+        // サウンドサイクル単位: r * 2^(s+1) * 8
+        val r = nr43.toInt() and 0x07
+        val s = (nr43.toInt() shr 4) and 0x0F
         // 周期をDouble型で計算（精度向上）
-        val period = if (shift < 16) {
-            (divisor shl shift) * 8.0
+        val period = if (s < 16) {
+            if (r == 0) {
+                // r = 0の場合、r = 0.5が代わりに使われる
+                // 周期 = 0.5 * 2^(s+1) * 8 = 2^s * 8
+                (1 shl s) * 8.0
+            } else {
+                // r != 0の場合、周期 = r * 2^(s+1) * 8
+                r * (1 shl (s + 1)) * 8.0
+            }
         } else {
             0.0
         }
@@ -934,17 +1033,9 @@ class Sound {
             return 0
         }
         
-        // サンプル生成時にLFSRの状態を正確に反映するため、
-        // 現在のサウンドサイクルに基づいてLFSRの状態を計算
-        // 実機では、LFSRは定期的に更新されるため、サンプル生成時には
-        // 現在のLFSR値を取得するだけで十分（updateNoiseChannelで既に更新されている）
-        // ただし、より正確なタイミングのため、サンプル生成時のLFSRの状態を補間
-        
-        // 現在のLFSRカウンタの位置を計算
-        val currentLfsrCounter = noiseState.lfsrCounterAccumulator % period
-        
         // LFSRはupdateNoiseChannelで更新されているため、現在の値をそのまま使用
         // ノイズ値を取得（LFSRの最下位ビット）
+        // 実機では、LFSRの最下位ビットが0の場合は-1、1の場合は+1を出力
         val noiseValue = if ((noiseState.lfsr and 1) != 0) 1 else -1
         
         // ボリュームを適用（0-15を0-32767にスケール）
@@ -958,30 +1049,54 @@ class Sound {
      * Square 1のスイープ処理を更新
      */
     private fun updateSweep(soundCycles: Int) {
-        if (!sweepEnabled || sweepPeriod == 0 || !square1State.enabled) {
+        // スイープが無効な場合、またはチャンネルが無効な場合は何もしない
+        if (!square1State.enabled) {
             return
         }
         
-        // 最初の更新は1サイクル遅延させる（実機の仕様）
+        // スイープが無効な場合（sweepPeriod == 0 かつ sweepShift == 0 の場合）
+        // ただし、sweepNegateが有効な場合はスイープが有効になる可能性がある
+        val nr10 = soundRegs[0x00]
+        val currentSweepPeriod = ((nr10.toInt() shr 4) and 0x07)
+        val currentSweepShift = nr10.toInt() and 0x07
+        
+        // スイープが無効な場合（period == 0 かつ shift == 0）
+        if (currentSweepPeriod == 0 && currentSweepShift == 0) {
+            // スイープが無効な場合でも、shadowFrequencyはレジスタから読み取る
+            // ただし、スイープ処理は実行しない
+            val nr13 = soundRegs[0x03]
+            val nr14 = soundRegs[0x04]
+            val regFrequency = ((nr14.toInt() and 0x07) shl 8) or nr13.toInt()
+            if (regFrequency != shadowFrequency) {
+                shadowFrequency = regFrequency
+            }
+            return
+        }
+        
+        // スイープが有効な場合のみ処理
         if (!sweepInitialized) {
             sweepInitialized = true
-            // 最初の更新を1サウンドサイクル遅延させる
-            if (soundCycles > 0) {
-                sweepCounter += soundCycles - 1
-            }
+            sweepCounter = 0
+            // 最初の更新を1サウンドサイクル遅延させる（実機の仕様）
             return
         }
         
         sweepCounter += soundCycles
         // 128Hz = 524288 / 128 = 4096サウンドサイクルごと
-        // sweepPeriodが0の場合は無効（既にチェック済み）
-        val sweepStep = 4096 / sweepPeriod.coerceAtLeast(1)
+        val sweepStep = 4096 / currentSweepPeriod.coerceAtLeast(1)
         while (sweepCounter >= sweepStep) {
             sweepCounter -= sweepStep
             
             // 周波数を更新
-            val change = shadowFrequency shr sweepShift
-            val newFrequency = if (sweepNegate) {
+            // 実機の仕様: change = shadowFrequency >> sweepShift
+            // changeが0の場合、スイープは停止する（実機の仕様）
+            val change = shadowFrequency shr currentSweepShift
+            if (change == 0) {
+                // changeが0の場合、スイープは停止する（実機の仕様）
+                break
+            }
+            
+            val newFrequency = if ((nr10.toInt() and 0x08) != 0) {
                 shadowFrequency - change
             } else {
                 shadowFrequency + change
@@ -990,6 +1105,7 @@ class Sound {
             if (newFrequency < 0 || newFrequency > 2047) {
                 square1State.enabled = false
                 sweepEnabled = false
+                break
             } else {
                 shadowFrequency = newFrequency
                 // 周波数レジスタを更新

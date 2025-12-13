@@ -395,6 +395,7 @@ class Cpu(
             0xF9 -> executeLdSpFromHl() // LD SP, HL
             0x08 -> executeLdMemoryFromSp() // LD (nn), SP
             0xF8 -> executeLdHlFromSpPlusImmediate() // LD HL, SP+e
+            0xE3 -> executeLdSpFromHlIndirect() // LD (SP), HL（SPが指すアドレスにHLを書き込む）
             // HL 自動インクリメント付きロード／ストア
             0x22 -> executeLdHLPlusFromA() // LD (HL+), A
             0x2A -> executeLdAFromHLPlus() // LD A, (HL+)
@@ -659,6 +660,26 @@ class Cpu(
     private fun executeLdSpFromHl(): Int {
         registers.sp = registers.hl
         return Cycles.LD_SP_HL
+    }
+    
+    /**
+     * LD (SP), HL 命令: [SP] ← HL。
+     *
+     * - オペコード: 0xE3
+     * - フラグ: 変更なし
+     * - サイクル数: 8（実機の仕様）
+     * - 動作: SPレジスタが指すアドレスにHLレジスタの値を書き込む
+     */
+    private fun executeLdSpFromHlIndirect(): Int {
+        val address = registers.sp
+        val hl = registers.hl.toInt()
+        val low = (hl and 0xFF).toUByte()
+        val high = ((hl shr 8) and 0xFF).toUByte()
+        
+        bus.writeByte(address, low)
+        bus.writeByte((address.toInt() + 1).toUShort(), high)
+        
+        return Cycles.LD_SP_HL // 8サイクル（実機の仕様）
     }
 
     /**

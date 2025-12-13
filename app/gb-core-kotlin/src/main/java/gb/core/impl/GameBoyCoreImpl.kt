@@ -107,6 +107,28 @@ class GameBoyCoreImpl : GameBoyCore {
                 val currentPc = m.cpu.registers.pc
                 if (currentPc == lastPc) {
                     pcStuckCount++
+                    
+                    // 0x38（RST 38H）でスタックしている場合は、割り込みハンドラの問題の可能性
+                    // この場合は、0x38のアドレスに何があるかを確認する必要がある
+                    if (currentPc == 0x38u.toUShort() && pcStuckCount == 101) {
+                        try {
+                            // SystemBus経由でメモリを読み取る
+                            val opcodeAt38 = m.bus.readByte(0x38u.toUShort())
+                            val sp = m.cpu.registers.sp
+                            val stackLow = m.bus.readByte(sp)
+                            val stackHigh = m.bus.readByte((sp.toInt() + 1).toUShort())
+                            val stackValue = (stackHigh.toInt() shl 8) or stackLow.toInt()
+                            android.util.Log.e(
+                                "GameBoyCore",
+                                "PC stuck at 0x38 (RST 38H interrupt handler). " +
+                                    "Opcode at 0x38: 0x${opcodeAt38.toString(16)}, " +
+                                    "SP=0x${sp.toString(16)}, " +
+                                    "Stack top (return address): 0x${stackValue.toString(16)}"
+                            )
+                        } catch (_: RuntimeException) {
+                            // テスト環境では無視
+                        }
+                    }
                     if (pcStuckCount == 101) {
                         // 最初の検出時に詳細な状態をログ出力
                         // IF/IEレジスタの状態も確認
@@ -147,8 +169,8 @@ class GameBoyCoreImpl : GameBoyCore {
 
             val pixels = m.ppu.renderFrame()
             val audioSamples = m.sound.generateSamples()
-            // ログ出力の頻度を大幅に減らす（600フレームごと = 約10秒ごと）
-            if (frameIndex % 600 == 1L) {
+            // 最適化: ログ出力をさらに削減（3000フレームごと = 約50秒ごと）
+            if (frameIndex % 3000 == 1L) {
                 // PCの値を確認（CPUが進んでいるか）
                 val pc = m.cpu.registers.pc
                 val ifReg = m.readIf()

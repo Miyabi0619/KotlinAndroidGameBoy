@@ -16,8 +16,8 @@ data class FrameResult(
     /**
      * オーディオサンプル。
      *
-     * - 1フレーム分のオーディオサンプル（約735サンプル、44.1kHzの場合）
-     * - 16bit PCM形式（Short配列）
+     * - 1フレーム分のオーディオサンプル（ステレオ形式、左右交互、約735サンプル×2、44.1kHzの場合）
+     * - 16bit PCM形式（Short配列、ステレオ形式：左、右、左、右...）
      * - nullの場合はオーディオ出力なし
      */
     val audioSamples: ShortArray? = null,
