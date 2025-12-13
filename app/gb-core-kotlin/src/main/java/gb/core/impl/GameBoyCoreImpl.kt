@@ -107,7 +107,7 @@ class GameBoyCoreImpl : GameBoyCore {
                 val currentPc = m.cpu.registers.pc
                 if (currentPc == lastPc) {
                     pcStuckCount++
-                    
+
                     // 0x38（RST 38H）でスタックしている場合は、割り込みハンドラの問題の可能性
                     // この場合は、0x38のアドレスに何があるかを確認する必要がある
                     if (currentPc == 0x38u.toUShort() && pcStuckCount == 101) {
@@ -118,7 +118,7 @@ class GameBoyCoreImpl : GameBoyCore {
                             val stackLow = m.bus.readByte(sp)
                             val stackHigh = m.bus.readByte((sp.toInt() + 1).toUShort())
                             val stackValue = (stackHigh.toInt() shl 8) or stackLow.toInt()
-                            
+
                             // 0x38に0xFF（RST 38H）がある場合は、無限ループになっている
                             // この場合は、0x38にRETI命令（0xD9）を配置する必要がある
                             if (opcodeAt38 == 0xFFu.toUByte()) {
@@ -129,7 +129,7 @@ class GameBoyCoreImpl : GameBoyCore {
                                         "SP=0x${sp.toString(16)}, " +
                                         "Stack top (return address): 0x${stackValue.toString(16)}. " +
                                         "This ROM may have invalid interrupt handler at 0x38. " +
-                                        "Attempting to fix by injecting RETI (0xD9) at 0x38."
+                                        "Attempting to fix by injecting RETI (0xD9) at 0x38.",
                                 )
                                 // 0x38にRETI命令（0xD9）を書き込む（一時的な修正）
                                 // 注意: これはROM領域なので、実際には書き込めないはずだが、
@@ -143,7 +143,7 @@ class GameBoyCoreImpl : GameBoyCore {
                                     "PC stuck at 0x38 (RST 38H interrupt handler). " +
                                         "Opcode at 0x38: 0x${opcodeAt38.toString(16)}, " +
                                         "SP=0x${sp.toString(16)}, " +
-                                        "Stack top (return address): 0x${stackValue.toString(16)}"
+                                        "Stack top (return address): 0x${stackValue.toString(16)}",
                                 )
                             }
                         } catch (_: RuntimeException) {

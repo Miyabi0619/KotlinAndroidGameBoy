@@ -319,25 +319,25 @@ class Ppu(
         val scxInt = scx.toInt()
         val bgMapBase = if (((lcdcInt shr 3) and 0x1) == 0) BG_MAP0_BASE else BG_MAP1_BASE
         val tileDataMode = (lcdcInt shr 4) and 0x1
-        
+
         // パレットマッピングを事前計算（4色分のARGB値を事前計算）
         val bgpInt = bgp.toInt()
-        val paletteColors = IntArray(4) { colorId ->
-            val paletteEntry = (bgpInt shr (colorId * 2)) and 0x03
-            when (paletteEntry) {
-                0 -> 0xFFFFFFFF.toInt() // 白
-                1 -> 0xFFAAAAAA.toInt() // 薄いグレー
-                2 -> 0xFF555555.toInt() // 濃いグレー
-                else -> 0xFF000000.toInt() // 黒
+        val paletteColors =
+            IntArray(4) { colorId ->
+                val paletteEntry = (bgpInt shr (colorId * 2)) and 0x03
+                when (paletteEntry) {
+                    0 -> 0xFFFFFFFF.toInt() // 白
+                    1 -> 0xFFAAAAAA.toInt() // 薄いグレー
+                    2 -> 0xFF555555.toInt() // 濃いグレー
+                    else -> 0xFF000000.toInt() // 黒
+                }
             }
-        }
-        
+
         // 最適化: 型変換と計算を削減（スコープ外で定義）
         val vramSize = vram.size
         val whiteColor = 0xFFFFFFFF.toInt()
-        
+
         if (bgEnabled) {
-            
             for (y in 0 until SCREEN_HEIGHT) {
                 // スクロールYを考慮した背景Y座標
                 val bgY = (y + scyInt) and 0xFF
@@ -452,7 +452,7 @@ class Ppu(
         // ウィンドウは画面の特定の領域にのみ描画される
         // 最適化: 型変換と計算を削減
         val vramSize = vram.size
-        
+
         for (y in windowStartY until SCREEN_HEIGHT) {
             // ウィンドウ内のY座標（ウィンドウのタイルマップ内での位置）
             val windowY = y - windowStartY
@@ -522,34 +522,36 @@ class Ppu(
     ) {
         // スプライトサイズを事前に計算
         val spriteSize = if (((lcdcInt shr 2) and 0x1) == 0) 8 else 16
-        
+
         // パレットマッピングを事前計算（OBP0/OBP1用）
         val obp0Int = obp0.toInt()
         val obp1Int = obp1.toInt()
-        val obp0Colors = IntArray(4) { colorId ->
-            val paletteEntry = (obp0Int shr (colorId * 2)) and 0x03
-            when (paletteEntry) {
-                0 -> 0xFFFFFFFF.toInt() // 白（透明）
-                1 -> 0xFFAAAAAA.toInt() // 薄いグレー
-                2 -> 0xFF555555.toInt() // 濃いグレー
-                else -> 0xFF000000.toInt() // 黒
+        val obp0Colors =
+            IntArray(4) { colorId ->
+                val paletteEntry = (obp0Int shr (colorId * 2)) and 0x03
+                when (paletteEntry) {
+                    0 -> 0xFFFFFFFF.toInt() // 白（透明）
+                    1 -> 0xFFAAAAAA.toInt() // 薄いグレー
+                    2 -> 0xFF555555.toInt() // 濃いグレー
+                    else -> 0xFF000000.toInt() // 黒
+                }
             }
-        }
-        val obp1Colors = IntArray(4) { colorId ->
-            val paletteEntry = (obp1Int shr (colorId * 2)) and 0x03
-            when (paletteEntry) {
-                0 -> 0xFFFFFFFF.toInt() // 白（透明）
-                1 -> 0xFFAAAAAA.toInt() // 薄いグレー
-                2 -> 0xFF555555.toInt() // 濃いグレー
-                else -> 0xFF000000.toInt() // 黒
+        val obp1Colors =
+            IntArray(4) { colorId ->
+                val paletteEntry = (obp1Int shr (colorId * 2)) and 0x03
+                when (paletteEntry) {
+                    0 -> 0xFFFFFFFF.toInt() // 白（透明）
+                    1 -> 0xFFAAAAAA.toInt() // 薄いグレー
+                    2 -> 0xFF555555.toInt() // 濃いグレー
+                    else -> 0xFF000000.toInt() // 黒
+                }
             }
-        }
-        
+
         // 各スキャンラインで、そのラインに表示されるスプライトを検索して描画
         // 最適化: 型変換と計算を削減
         val vramSize = vram.size
         val oamSize = oam.size
-        
+
         for (y in 0 until SCREEN_HEIGHT) {
             val spritesOnLine = mutableListOf<Int>()
 

@@ -661,7 +661,7 @@ class Cpu(
         registers.sp = registers.hl
         return Cycles.LD_SP_HL
     }
-    
+
     /**
      * LD (SP), HL 命令: [SP] ← HL。
      *
@@ -675,10 +675,10 @@ class Cpu(
         val hl = registers.hl.toInt()
         val low = (hl and 0xFF).toUByte()
         val high = ((hl shr 8) and 0xFF).toUByte()
-        
+
         bus.writeByte(address, low)
         bus.writeByte((address.toInt() + 1).toUShort(), high)
-        
+
         return Cycles.LD_SP_HL // 8サイクル（実機の仕様）
     }
 

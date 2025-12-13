@@ -53,7 +53,7 @@ class SystemBus(
      * サウンド処理（APU）
      */
     private val sound: Sound = sound
-    
+
     /**
      * その他 I/O レジスタ（FF50–FF7F）のバックアップ。
      */
