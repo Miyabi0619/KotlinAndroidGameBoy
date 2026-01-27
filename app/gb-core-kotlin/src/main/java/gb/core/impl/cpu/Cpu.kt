@@ -178,6 +178,11 @@ class Cpu(
     fun isHalted(): Boolean = halted
 
     /**
+     * 現在STOP状態かどうかを返す。
+     */
+    fun isStopped(): Boolean = stopped
+
+    /**
      * HALT状態を解除する（割り込み発生時などに使用）。
      */
     fun wakeFromHalt() {
@@ -216,285 +221,1270 @@ class Cpu(
         pcBefore: UShort,
     ): Int =
         when (opcode) {
-            0x00 -> executeNop()
-            0xCB -> executeCbPrefixed()
+            0x00 -> {
+                executeNop()
+            }
+
+            0xCB -> {
+                executeCbPrefixed()
+            }
+
             // 即値ロード
-            0x06 -> executeLdImmediate(::setB) // LD B, n
-            0x0E -> executeLdImmediate(::setC) // LD C, n
-            0x16 -> executeLdImmediate(::setD) // LD D, n
-            0x1E -> executeLdImmediate(::setE) // LD E, n
-            0x26 -> executeLdImmediate(::setH) // LD H, n
-            0x2E -> executeLdImmediate(::setL) // LD L, n
-            0x3E -> executeLdImmediate(::setA) // LD A, n
+            0x06 -> {
+                executeLdImmediate(::setB)
+            }
+
+            // LD B, n
+            0x0E -> {
+                executeLdImmediate(::setC)
+            }
+
+            // LD C, n
+            0x16 -> {
+                executeLdImmediate(::setD)
+            }
+
+            // LD D, n
+            0x1E -> {
+                executeLdImmediate(::setE)
+            }
+
+            // LD E, n
+            0x26 -> {
+                executeLdImmediate(::setH)
+            }
+
+            // LD H, n
+            0x2E -> {
+                executeLdImmediate(::setL)
+            }
+
+            // LD L, n
+            0x3E -> {
+                executeLdImmediate(::setA)
+            }
+
+            // LD A, n
             // 16bit 即値ロード
-            0x01 -> executeLd16Immediate { value -> registers.bc = value } // LD BC, nn
-            0x11 -> executeLd16Immediate { value -> registers.de = value } // LD DE, nn
-            0x21 -> executeLd16Immediate { value -> registers.hl = value } // LD HL, nn
-            0x31 -> executeLd16Immediate { value -> registers.sp = value } // LD SP, nn
+            0x01 -> {
+                executeLd16Immediate { value -> registers.bc = value }
+            }
+
+            // LD BC, nn
+            0x11 -> {
+                executeLd16Immediate { value -> registers.de = value }
+            }
+
+            // LD DE, nn
+            0x21 -> {
+                executeLd16Immediate { value -> registers.hl = value }
+            }
+
+            // LD HL, nn
+            0x31 -> {
+                executeLd16Immediate { value -> registers.sp = value }
+            }
+
+            // LD SP, nn
             // 8bit INC
-            0x04 -> executeInc8({ registers.b }, ::setB) // INC B
-            0x0C -> executeInc8({ registers.c }, ::setC) // INC C
-            0x14 -> executeInc8({ registers.d }, ::setD) // INC D
-            0x1C -> executeInc8({ registers.e }, ::setE) // INC E
-            0x24 -> executeInc8({ registers.h }, ::setH) // INC H
-            0x2C -> executeInc8({ registers.l }, ::setL) // INC L
-            0x3C -> executeInc8({ registers.a }, ::setA) // INC A
-            0x34 -> executeIncAtHL() // INC (HL)
+            0x04 -> {
+                executeInc8({ registers.b }, ::setB)
+            }
+
+            // INC B
+            0x0C -> {
+                executeInc8({ registers.c }, ::setC)
+            }
+
+            // INC C
+            0x14 -> {
+                executeInc8({ registers.d }, ::setD)
+            }
+
+            // INC D
+            0x1C -> {
+                executeInc8({ registers.e }, ::setE)
+            }
+
+            // INC E
+            0x24 -> {
+                executeInc8({ registers.h }, ::setH)
+            }
+
+            // INC H
+            0x2C -> {
+                executeInc8({ registers.l }, ::setL)
+            }
+
+            // INC L
+            0x3C -> {
+                executeInc8({ registers.a }, ::setA)
+            }
+
+            // INC A
+            0x34 -> {
+                executeIncAtHL()
+            }
+
+            // INC (HL)
             // 8bit DEC
-            0x36 -> executeLdHLFromImmediate() // LD (HL), n
-            0x05 -> executeDec8({ registers.b }, ::setB) // DEC B
-            0x0D -> executeDec8({ registers.c }, ::setC) // DEC C
-            0x15 -> executeDec8({ registers.d }, ::setD) // DEC D
-            0x1D -> executeDec8({ registers.e }, ::setE) // DEC E
-            0x25 -> executeDec8({ registers.h }, ::setH) // DEC H
-            0x2D -> executeDec8({ registers.l }, ::setL) // DEC L
-            0x3D -> executeDec8({ registers.a }, ::setA) // DEC A
-            0x35 -> executeDecAtHL() // DEC (HL)
+            0x36 -> {
+                executeLdHLFromImmediate()
+            }
+
+            // LD (HL), n
+            0x05 -> {
+                executeDec8({ registers.b }, ::setB)
+            }
+
+            // DEC B
+            0x0D -> {
+                executeDec8({ registers.c }, ::setC)
+            }
+
+            // DEC C
+            0x15 -> {
+                executeDec8({ registers.d }, ::setD)
+            }
+
+            // DEC D
+            0x1D -> {
+                executeDec8({ registers.e }, ::setE)
+            }
+
+            // DEC E
+            0x25 -> {
+                executeDec8({ registers.h }, ::setH)
+            }
+
+            // DEC H
+            0x2D -> {
+                executeDec8({ registers.l }, ::setL)
+            }
+
+            // DEC L
+            0x3D -> {
+                executeDec8({ registers.a }, ::setA)
+            }
+
+            // DEC A
+            0x35 -> {
+                executeDecAtHL()
+            }
+
+            // DEC (HL)
             // A 専用ローテート／フラグ操作
-            0x07 -> executeRlca() // RLCA
-            0x0F -> executeRrca() // RRCA
-            0x17 -> executeRla() // RLA
-            0x1F -> executeRra() // RRA
-            0x2F -> executeCpl() // CPL
-            0x37 -> executeScf() // SCF
-            0x3F -> executeCcf() // CCF
+            0x07 -> {
+                executeRlca()
+            }
+
+            // RLCA
+            0x0F -> {
+                executeRrca()
+            }
+
+            // RRCA
+            0x17 -> {
+                executeRla()
+            }
+
+            // RLA
+            0x1F -> {
+                executeRra()
+            }
+
+            // RRA
+            0x2F -> {
+                executeCpl()
+            }
+
+            // CPL
+            0x37 -> {
+                executeScf()
+            }
+
+            // SCF
+            0x3F -> {
+                executeCcf()
+            }
+
+            // CCF
             // 8bit 算術（A, r / A, n / A, (HL)）
-            0x27 -> executeDaa() // DAA
-            0x80 -> executeAlu(AluOp.ADD, registers.b) // ADD A, B
-            0x81 -> executeAlu(AluOp.ADD, registers.c) // ADD A, C
-            0x82 -> executeAlu(AluOp.ADD, registers.d) // ADD A, D
-            0x83 -> executeAlu(AluOp.ADD, registers.e) // ADD A, E
-            0x84 -> executeAlu(AluOp.ADD, registers.h) // ADD A, H
-            0x85 -> executeAlu(AluOp.ADD, registers.l) // ADD A, L
-            0x87 -> executeAlu(AluOp.ADD, registers.a) // ADD A, A
-            0x86 -> executeAluFromHL(AluOp.ADD) // ADD A, (HL)
-            0xC6 -> executeAluImmediate(AluOp.ADD) // ADD A, n
-            0x88 -> executeAlu(AluOp.ADC, registers.b) // ADC A, B
-            0x89 -> executeAlu(AluOp.ADC, registers.c) // ADC A, C
-            0x8A -> executeAlu(AluOp.ADC, registers.d) // ADC A, D
-            0x8B -> executeAlu(AluOp.ADC, registers.e) // ADC A, E
-            0x8C -> executeAlu(AluOp.ADC, registers.h) // ADC A, H
-            0x8D -> executeAlu(AluOp.ADC, registers.l) // ADC A, L
-            0x8F -> executeAlu(AluOp.ADC, registers.a) // ADC A, A
-            0x8E -> executeAluFromHL(AluOp.ADC) // ADC A, (HL)
-            0xCE -> executeAluImmediate(AluOp.ADC) // ADC A, n
-            0x90 -> executeAlu(AluOp.SUB, registers.b) // SUB B
-            0x91 -> executeAlu(AluOp.SUB, registers.c) // SUB C
-            0x92 -> executeAlu(AluOp.SUB, registers.d) // SUB D
-            0x93 -> executeAlu(AluOp.SUB, registers.e) // SUB E
-            0x94 -> executeAlu(AluOp.SUB, registers.h) // SUB H
-            0x95 -> executeAlu(AluOp.SUB, registers.l) // SUB L
-            0x97 -> executeAlu(AluOp.SUB, registers.a) // SUB A
-            0x96 -> executeAluFromHL(AluOp.SUB) // SUB (HL)
-            0xD6 -> executeAluImmediate(AluOp.SUB) // SUB n
-            0x98 -> executeAlu(AluOp.SBC, registers.b) // SBC A, B
-            0x99 -> executeAlu(AluOp.SBC, registers.c) // SBC A, C
-            0x9A -> executeAlu(AluOp.SBC, registers.d) // SBC A, D
-            0x9B -> executeAlu(AluOp.SBC, registers.e) // SBC A, E
-            0x9C -> executeAlu(AluOp.SBC, registers.h) // SBC A, H
-            0x9D -> executeAlu(AluOp.SBC, registers.l) // SBC A, L
-            0x9F -> executeAlu(AluOp.SBC, registers.a) // SBC A, A
-            0x9E -> executeAluFromHL(AluOp.SBC) // SBC A, (HL)
-            0xDE -> executeAluImmediate(AluOp.SBC) // SBC A, n
-            0xA0 -> executeAlu(AluOp.AND, registers.b) // AND B
-            0xA1 -> executeAlu(AluOp.AND, registers.c) // AND C
-            0xA2 -> executeAlu(AluOp.AND, registers.d) // AND D
-            0xA3 -> executeAlu(AluOp.AND, registers.e) // AND E
-            0xA4 -> executeAlu(AluOp.AND, registers.h) // AND H
-            0xA5 -> executeAlu(AluOp.AND, registers.l) // AND L
-            0xA7 -> executeAlu(AluOp.AND, registers.a) // AND A
-            0xA6 -> executeAluFromHL(AluOp.AND) // AND (HL)
-            0xE6 -> executeAluImmediate(AluOp.AND) // AND n
-            0xA8 -> executeAlu(AluOp.XOR, registers.b) // XOR B
-            0xA9 -> executeAlu(AluOp.XOR, registers.c) // XOR C
-            0xAA -> executeAlu(AluOp.XOR, registers.d) // XOR D
-            0xAB -> executeAlu(AluOp.XOR, registers.e) // XOR E
-            0xAC -> executeAlu(AluOp.XOR, registers.h) // XOR H
-            0xAD -> executeAlu(AluOp.XOR, registers.l) // XOR L
-            0xAF -> executeAlu(AluOp.XOR, registers.a) // XOR A
-            0xAE -> executeAluFromHL(AluOp.XOR) // XOR (HL)
-            0xEE -> executeAluImmediate(AluOp.XOR) // XOR n
-            0xB0 -> executeAlu(AluOp.OR, registers.b) // OR B
-            0xB1 -> executeAlu(AluOp.OR, registers.c) // OR C
-            0xB2 -> executeAlu(AluOp.OR, registers.d) // OR D
-            0xB3 -> executeAlu(AluOp.OR, registers.e) // OR E
-            0xB4 -> executeAlu(AluOp.OR, registers.h) // OR H
-            0xB5 -> executeAlu(AluOp.OR, registers.l) // OR L
-            0xB7 -> executeAlu(AluOp.OR, registers.a) // OR A
-            0xB6 -> executeAluFromHL(AluOp.OR) // OR (HL)
-            0xF6 -> executeAluImmediate(AluOp.OR) // OR n
-            0xB8 -> executeAlu(AluOp.CP, registers.b) // CP B
-            0xB9 -> executeAlu(AluOp.CP, registers.c) // CP C
-            0xBA -> executeAlu(AluOp.CP, registers.d) // CP D
-            0xBB -> executeAlu(AluOp.CP, registers.e) // CP E
-            0xBC -> executeAlu(AluOp.CP, registers.h) // CP H
-            0xBD -> executeAlu(AluOp.CP, registers.l) // CP L
-            0xBF -> executeAlu(AluOp.CP, registers.a) // CP A
-            0xBE -> executeAluFromHL(AluOp.CP) // CP (HL)
-            0xFE -> executeAluImmediate(AluOp.CP) // CP n
+            0x27 -> {
+                executeDaa()
+            }
+
+            // DAA
+            0x80 -> {
+                executeAlu(AluOp.ADD, registers.b)
+            }
+
+            // ADD A, B
+            0x81 -> {
+                executeAlu(AluOp.ADD, registers.c)
+            }
+
+            // ADD A, C
+            0x82 -> {
+                executeAlu(AluOp.ADD, registers.d)
+            }
+
+            // ADD A, D
+            0x83 -> {
+                executeAlu(AluOp.ADD, registers.e)
+            }
+
+            // ADD A, E
+            0x84 -> {
+                executeAlu(AluOp.ADD, registers.h)
+            }
+
+            // ADD A, H
+            0x85 -> {
+                executeAlu(AluOp.ADD, registers.l)
+            }
+
+            // ADD A, L
+            0x87 -> {
+                executeAlu(AluOp.ADD, registers.a)
+            }
+
+            // ADD A, A
+            0x86 -> {
+                executeAluFromHL(AluOp.ADD)
+            }
+
+            // ADD A, (HL)
+            0xC6 -> {
+                executeAluImmediate(AluOp.ADD)
+            }
+
+            // ADD A, n
+            0x88 -> {
+                executeAlu(AluOp.ADC, registers.b)
+            }
+
+            // ADC A, B
+            0x89 -> {
+                executeAlu(AluOp.ADC, registers.c)
+            }
+
+            // ADC A, C
+            0x8A -> {
+                executeAlu(AluOp.ADC, registers.d)
+            }
+
+            // ADC A, D
+            0x8B -> {
+                executeAlu(AluOp.ADC, registers.e)
+            }
+
+            // ADC A, E
+            0x8C -> {
+                executeAlu(AluOp.ADC, registers.h)
+            }
+
+            // ADC A, H
+            0x8D -> {
+                executeAlu(AluOp.ADC, registers.l)
+            }
+
+            // ADC A, L
+            0x8F -> {
+                executeAlu(AluOp.ADC, registers.a)
+            }
+
+            // ADC A, A
+            0x8E -> {
+                executeAluFromHL(AluOp.ADC)
+            }
+
+            // ADC A, (HL)
+            0xCE -> {
+                executeAluImmediate(AluOp.ADC)
+            }
+
+            // ADC A, n
+            0x90 -> {
+                executeAlu(AluOp.SUB, registers.b)
+            }
+
+            // SUB B
+            0x91 -> {
+                executeAlu(AluOp.SUB, registers.c)
+            }
+
+            // SUB C
+            0x92 -> {
+                executeAlu(AluOp.SUB, registers.d)
+            }
+
+            // SUB D
+            0x93 -> {
+                executeAlu(AluOp.SUB, registers.e)
+            }
+
+            // SUB E
+            0x94 -> {
+                executeAlu(AluOp.SUB, registers.h)
+            }
+
+            // SUB H
+            0x95 -> {
+                executeAlu(AluOp.SUB, registers.l)
+            }
+
+            // SUB L
+            0x97 -> {
+                executeAlu(AluOp.SUB, registers.a)
+            }
+
+            // SUB A
+            0x96 -> {
+                executeAluFromHL(AluOp.SUB)
+            }
+
+            // SUB (HL)
+            0xD6 -> {
+                executeAluImmediate(AluOp.SUB)
+            }
+
+            // SUB n
+            0x98 -> {
+                executeAlu(AluOp.SBC, registers.b)
+            }
+
+            // SBC A, B
+            0x99 -> {
+                executeAlu(AluOp.SBC, registers.c)
+            }
+
+            // SBC A, C
+            0x9A -> {
+                executeAlu(AluOp.SBC, registers.d)
+            }
+
+            // SBC A, D
+            0x9B -> {
+                executeAlu(AluOp.SBC, registers.e)
+            }
+
+            // SBC A, E
+            0x9C -> {
+                executeAlu(AluOp.SBC, registers.h)
+            }
+
+            // SBC A, H
+            0x9D -> {
+                executeAlu(AluOp.SBC, registers.l)
+            }
+
+            // SBC A, L
+            0x9F -> {
+                executeAlu(AluOp.SBC, registers.a)
+            }
+
+            // SBC A, A
+            0x9E -> {
+                executeAluFromHL(AluOp.SBC)
+            }
+
+            // SBC A, (HL)
+            0xDE -> {
+                executeAluImmediate(AluOp.SBC)
+            }
+
+            // SBC A, n
+            0xA0 -> {
+                executeAlu(AluOp.AND, registers.b)
+            }
+
+            // AND B
+            0xA1 -> {
+                executeAlu(AluOp.AND, registers.c)
+            }
+
+            // AND C
+            0xA2 -> {
+                executeAlu(AluOp.AND, registers.d)
+            }
+
+            // AND D
+            0xA3 -> {
+                executeAlu(AluOp.AND, registers.e)
+            }
+
+            // AND E
+            0xA4 -> {
+                executeAlu(AluOp.AND, registers.h)
+            }
+
+            // AND H
+            0xA5 -> {
+                executeAlu(AluOp.AND, registers.l)
+            }
+
+            // AND L
+            0xA7 -> {
+                executeAlu(AluOp.AND, registers.a)
+            }
+
+            // AND A
+            0xA6 -> {
+                executeAluFromHL(AluOp.AND)
+            }
+
+            // AND (HL)
+            0xE6 -> {
+                executeAluImmediate(AluOp.AND)
+            }
+
+            // AND n
+            0xA8 -> {
+                executeAlu(AluOp.XOR, registers.b)
+            }
+
+            // XOR B
+            0xA9 -> {
+                executeAlu(AluOp.XOR, registers.c)
+            }
+
+            // XOR C
+            0xAA -> {
+                executeAlu(AluOp.XOR, registers.d)
+            }
+
+            // XOR D
+            0xAB -> {
+                executeAlu(AluOp.XOR, registers.e)
+            }
+
+            // XOR E
+            0xAC -> {
+                executeAlu(AluOp.XOR, registers.h)
+            }
+
+            // XOR H
+            0xAD -> {
+                executeAlu(AluOp.XOR, registers.l)
+            }
+
+            // XOR L
+            0xAF -> {
+                executeAlu(AluOp.XOR, registers.a)
+            }
+
+            // XOR A
+            0xAE -> {
+                executeAluFromHL(AluOp.XOR)
+            }
+
+            // XOR (HL)
+            0xEE -> {
+                executeAluImmediate(AluOp.XOR)
+            }
+
+            // XOR n
+            0xB0 -> {
+                executeAlu(AluOp.OR, registers.b)
+            }
+
+            // OR B
+            0xB1 -> {
+                executeAlu(AluOp.OR, registers.c)
+            }
+
+            // OR C
+            0xB2 -> {
+                executeAlu(AluOp.OR, registers.d)
+            }
+
+            // OR D
+            0xB3 -> {
+                executeAlu(AluOp.OR, registers.e)
+            }
+
+            // OR E
+            0xB4 -> {
+                executeAlu(AluOp.OR, registers.h)
+            }
+
+            // OR H
+            0xB5 -> {
+                executeAlu(AluOp.OR, registers.l)
+            }
+
+            // OR L
+            0xB7 -> {
+                executeAlu(AluOp.OR, registers.a)
+            }
+
+            // OR A
+            0xB6 -> {
+                executeAluFromHL(AluOp.OR)
+            }
+
+            // OR (HL)
+            0xF6 -> {
+                executeAluImmediate(AluOp.OR)
+            }
+
+            // OR n
+            0xB8 -> {
+                executeAlu(AluOp.CP, registers.b)
+            }
+
+            // CP B
+            0xB9 -> {
+                executeAlu(AluOp.CP, registers.c)
+            }
+
+            // CP C
+            0xBA -> {
+                executeAlu(AluOp.CP, registers.d)
+            }
+
+            // CP D
+            0xBB -> {
+                executeAlu(AluOp.CP, registers.e)
+            }
+
+            // CP E
+            0xBC -> {
+                executeAlu(AluOp.CP, registers.h)
+            }
+
+            // CP H
+            0xBD -> {
+                executeAlu(AluOp.CP, registers.l)
+            }
+
+            // CP L
+            0xBF -> {
+                executeAlu(AluOp.CP, registers.a)
+            }
+
+            // CP A
+            0xBE -> {
+                executeAluFromHL(AluOp.CP)
+            }
+
+            // CP (HL)
+            0xFE -> {
+                executeAluImmediate(AluOp.CP)
+            }
+
+            // CP n
             // JP nn / JP cc, nn
-            0xC3 -> executeJpUnconditional() // JP nn
-            0xC2 -> executeJpConditional(Condition.NZ) // JP NZ, nn
-            0xCA -> executeJpConditional(Condition.Z) // JP Z, nn
-            0xD2 -> executeJpConditional(Condition.NC) // JP NC, nn
-            0xDA -> executeJpConditional(Condition.C) // JP C, nn
+            0xC3 -> {
+                executeJpUnconditional()
+            }
+
+            // JP nn
+            0xC2 -> {
+                executeJpConditional(Condition.NZ)
+            }
+
+            // JP NZ, nn
+            0xCA -> {
+                executeJpConditional(Condition.Z)
+            }
+
+            // JP Z, nn
+            0xD2 -> {
+                executeJpConditional(Condition.NC)
+            }
+
+            // JP NC, nn
+            0xDA -> {
+                executeJpConditional(Condition.C)
+            }
+
+            // JP C, nn
             // JR e / JR cc, e
-            0x18 -> executeJrUnconditional() // JR e
-            0x20 -> executeJrConditional(Condition.NZ) // JR NZ, e
-            0x28 -> executeJrConditional(Condition.Z) // JR Z, e
-            0x30 -> executeJrConditional(Condition.NC) // JR NC, e
-            0x38 -> executeJrConditional(Condition.C) // JR C, e
+            0x18 -> {
+                executeJrUnconditional()
+            }
+
+            // JR e
+            0x20 -> {
+                executeJrConditional(Condition.NZ)
+            }
+
+            // JR NZ, e
+            0x28 -> {
+                executeJrConditional(Condition.Z)
+            }
+
+            // JR Z, e
+            0x30 -> {
+                executeJrConditional(Condition.NC)
+            }
+
+            // JR NC, e
+            0x38 -> {
+                executeJrConditional(Condition.C)
+            }
+
+            // JR C, e
             // PUSH rr / POP rr
-            0xC5 -> executePush { registers.bc } // PUSH BC
-            0xD5 -> executePush { registers.de } // PUSH DE
-            0xE5 -> executePush { registers.hl } // PUSH HL
-            0xF5 -> executePush { registers.af } // PUSH AF
-            0xC1 -> executePop { value -> registers.bc = value } // POP BC
-            0xD1 -> executePop { value -> registers.de = value } // POP DE
-            0xE1 -> executePop { value -> registers.hl = value } // POP HL
-            0xF1 -> executePop { value -> registers.af = value } // POP AF
+            0xC5 -> {
+                executePush { registers.bc }
+            }
+
+            // PUSH BC
+            0xD5 -> {
+                executePush { registers.de }
+            }
+
+            // PUSH DE
+            0xE5 -> {
+                executePush { registers.hl }
+            }
+
+            // PUSH HL
+            0xF5 -> {
+                executePush { registers.af }
+            }
+
+            // PUSH AF
+            0xC1 -> {
+                executePop { value -> registers.bc = value }
+            }
+
+            // POP BC
+            0xD1 -> {
+                executePop { value -> registers.de = value }
+            }
+
+            // POP DE
+            0xE1 -> {
+                executePop { value -> registers.hl = value }
+            }
+
+            // POP HL
+            0xF1 -> {
+                executePop { value -> registers.af = value }
+            }
+
+            // POP AF
             // CALL nn / CALL cc, nn
-            0xCD -> executeCallUnconditional() // CALL nn
-            0xC4 -> executeCallConditional(Condition.NZ) // CALL NZ, nn
-            0xCC -> executeCallConditional(Condition.Z) // CALL Z, nn
-            0xD4 -> executeCallConditional(Condition.NC) // CALL NC, nn
-            0xDC -> executeCallConditional(Condition.C) // CALL C, nn
+            0xCD -> {
+                executeCallUnconditional()
+            }
+
+            // CALL nn
+            0xC4 -> {
+                executeCallConditional(Condition.NZ)
+            }
+
+            // CALL NZ, nn
+            0xCC -> {
+                executeCallConditional(Condition.Z)
+            }
+
+            // CALL Z, nn
+            0xD4 -> {
+                executeCallConditional(Condition.NC)
+            }
+
+            // CALL NC, nn
+            0xDC -> {
+                executeCallConditional(Condition.C)
+            }
+
+            // CALL C, nn
             // RET / RET cc
-            0xC9 -> executeRetUnconditional() // RET
-            0xC0 -> executeRetConditional(Condition.NZ) // RET NZ
-            0xC8 -> executeRetConditional(Condition.Z) // RET Z
-            0xD0 -> executeRetConditional(Condition.NC) // RET NC
-            0xD8 -> executeRetConditional(Condition.C) // RET C
+            0xC9 -> {
+                executeRetUnconditional()
+            }
+
+            // RET
+            0xC0 -> {
+                executeRetConditional(Condition.NZ)
+            }
+
+            // RET NZ
+            0xC8 -> {
+                executeRetConditional(Condition.Z)
+            }
+
+            // RET Z
+            0xD0 -> {
+                executeRetConditional(Condition.NC)
+            }
+
+            // RET NC
+            0xD8 -> {
+                executeRetConditional(Condition.C)
+            }
+
+            // RET C
             // RST
-            0xC7 -> executeRst(0x00u) // RST 00H
-            0xCF -> executeRst(0x08u) // RST 08H
-            0xD7 -> executeRst(0x10u) // RST 10H
-            0xDF -> executeRst(0x18u) // RST 18H
-            0xE7 -> executeRst(0x20u) // RST 20H
-            0xEF -> executeRst(0x28u) // RST 28H
-            0xF7 -> executeRst(0x30u) // RST 30H
-            0xFF -> executeRst(0x38u) // RST 38H
+            0xC7 -> {
+                executeRst(0x00u)
+            }
+
+            // RST 00H
+            0xCF -> {
+                executeRst(0x08u)
+            }
+
+            // RST 08H
+            0xD7 -> {
+                executeRst(0x10u)
+            }
+
+            // RST 10H
+            0xDF -> {
+                executeRst(0x18u)
+            }
+
+            // RST 18H
+            0xE7 -> {
+                executeRst(0x20u)
+            }
+
+            // RST 20H
+            0xEF -> {
+                executeRst(0x28u)
+            }
+
+            // RST 28H
+            0xF7 -> {
+                executeRst(0x30u)
+            }
+
+            // RST 30H
+            0xFF -> {
+                executeRst(0x38u)
+            }
+
+            // RST 38H
             // 16bit INC/DEC
-            0x03 -> executeIncBC()
-            0x0B -> executeDecBC()
-            0x23 -> executeIncHL()
-            0x2B -> executeDecHL()
-            0x13 -> executeIncDE()
-            0x1B -> executeDecDE()
-            0x33 -> executeIncSP()
-            0x3B -> executeDecSP()
+            0x03 -> {
+                executeIncBC()
+            }
+
+            0x0B -> {
+                executeDecBC()
+            }
+
+            0x23 -> {
+                executeIncHL()
+            }
+
+            0x2B -> {
+                executeDecHL()
+            }
+
+            0x13 -> {
+                executeIncDE()
+            }
+
+            0x1B -> {
+                executeDecDE()
+            }
+
+            0x33 -> {
+                executeIncSP()
+            }
+
+            0x3B -> {
+                executeDecSP()
+            }
+
             // 16bit ADD HL, rr
-            0x09 -> executeAddHl(registers.bc) // ADD HL, BC
-            0x19 -> executeAddHl(registers.de) // ADD HL, DE
-            0x29 -> executeAddHl(registers.hl) // ADD HL, HL
-            0x39 -> executeAddHl(registers.sp) // ADD HL, SP
+            0x09 -> {
+                executeAddHl(registers.bc)
+            }
+
+            // ADD HL, BC
+            0x19 -> {
+                executeAddHl(registers.de)
+            }
+
+            // ADD HL, DE
+            0x29 -> {
+                executeAddHl(registers.hl)
+            }
+
+            // ADD HL, HL
+            0x39 -> {
+                executeAddHl(registers.sp)
+            }
+
+            // ADD HL, SP
             // 間接ジャンプ / RETI
-            0xE9 -> executeJpHl() // JP (HL)
-            0xD9 -> executeReti() // RETI
+            0xE9 -> {
+                executeJpHl()
+            }
+
+            // JP (HL)
+            0xD9 -> {
+                executeReti()
+            }
+
+            // RETI
             // 16bit LD（SP とメモリ）
-            0xF9 -> executeLdSpFromHl() // LD SP, HL
-            0x08 -> executeLdMemoryFromSp() // LD (nn), SP
-            0xF8 -> executeLdHlFromSpPlusImmediate() // LD HL, SP+e
-            0xE3 -> executeLdSpFromHlIndirect() // LD (SP), HL（SPが指すアドレスにHLを書き込む）
+            0xF9 -> {
+                executeLdSpFromHl()
+            }
+
+            // LD SP, HL
+            0x08 -> {
+                executeLdMemoryFromSp()
+            }
+
+            // LD (nn), SP
+            0xF8 -> {
+                executeLdHlFromSpPlusImmediate()
+            }
+
+            // LD HL, SP+e
+            0xE3 -> {
+                // Undefined opcode on LR35902: treat as 1-byte NOP
+                executeNop()
+            }
+
+            // 0xE3 は LR35902 では未定義命令のため、1バイトNOPとして扱う
             // HL 自動インクリメント付きロード／ストア
-            0x22 -> executeLdHLPlusFromA() // LD (HL+), A
-            0x2A -> executeLdAFromHLPlus() // LD A, (HL+)
-            0x32 -> executeLdHLMinusFromA() // LD (HL-), A
-            0x3A -> executeLdAFromHLMinus() // LD A, (HL-)
+            0x22 -> {
+                executeLdHLPlusFromA()
+            }
+
+            // LD (HL+), A
+            0x2A -> {
+                executeLdAFromHLPlus()
+            }
+
+            // LD A, (HL+)
+            0x32 -> {
+                executeLdHLMinusFromA()
+            }
+
+            // LD (HL-), A
+            0x3A -> {
+                executeLdAFromHLMinus()
+            }
+
+            // LD A, (HL-)
             // HL 経由のメモリアクセス（単発）
-            0x7E -> executeLdAFromHL()
-            0x77 -> executeLdHLFromA()
+            0x7E -> {
+                executeLdAFromHL()
+            }
+
+            0x77 -> {
+                executeLdHLFromA()
+            }
+
             // A <-> (BC/DE)
-            0x0A -> executeLdAFromIndirect(registers.bc) // LD A, (BC)
-            0x1A -> executeLdAFromIndirect(registers.de) // LD A, (DE)
-            0x02 -> executeLdIndirectFromA(registers.bc) // LD (BC), A
-            0x12 -> executeLdIndirectFromA(registers.de) // LD (DE), A
+            0x0A -> {
+                executeLdAFromIndirect(registers.bc)
+            }
+
+            // LD A, (BC)
+            0x1A -> {
+                executeLdAFromIndirect(registers.de)
+            }
+
+            // LD A, (DE)
+            0x02 -> {
+                executeLdIndirectFromA(registers.bc)
+            }
+
+            // LD (BC), A
+            0x12 -> {
+                executeLdIndirectFromA(registers.de)
+            }
+
+            // LD (DE), A
             // A <-> (nn)
-            0xFA -> executeLdAFromDirectAddress() // LD A, (nn)
-            0xEA -> executeLdDirectAddressFromA() // LD (nn), A
+            0xFA -> {
+                executeLdAFromDirectAddress()
+            }
+
+            // LD A, (nn)
+            0xEA -> {
+                executeLdDirectAddressFromA()
+            }
+
+            // LD (nn), A
             // 高位 I/O / HRAM アクセス
-            0xE0 -> executeLdhFromAWithImmediateOffset() // LDH (n), A
-            0xF0 -> executeLdhAToImmediateOffset() // LDH A, (n)
-            0xE2 -> executeLdhFromAWithCOffset() // LD (C), A
-            0xF2 -> executeLdhAToCOffset() // LD A, (C)
+            0xE0 -> {
+                executeLdhFromAWithImmediateOffset()
+            }
+
+            // LDH (n), A
+            0xF0 -> {
+                executeLdhAToImmediateOffset()
+            }
+
+            // LDH A, (n)
+            0xE2 -> {
+                executeLdhFromAWithCOffset()
+            }
+
+            // LD (C), A
+            0xF2 -> {
+                executeLdhAToCOffset()
+            }
+
+            // LD A, (C)
             // 割り込み制御 / CPU 制御
-            0xF3 -> executeDi() // DI
-            0xFB -> executeEi() // EI
-            0x76 -> executeHalt() // HALT
-            0x10 -> executeStop() // STOP
+            0xF3 -> {
+                executeDi()
+            }
+
+            // DI
+            0xFB -> {
+                executeEi()
+            }
+
+            // EI
+            0x76 -> {
+                executeHalt()
+            }
+
+            // HALT
+            0x10 -> {
+                executeStop()
+            }
+
+            // STOP
             // レジスタ <-> (HL)
-            0x46 -> executeLdRegisterFromHL(::setB) // LD B, (HL)
-            0x4E -> executeLdRegisterFromHL(::setC) // LD C, (HL)
-            0x56 -> executeLdRegisterFromHL(::setD) // LD D, (HL)
-            0x5E -> executeLdRegisterFromHL(::setE) // LD E, (HL)
-            0x66 -> executeLdRegisterFromHL(::setH) // LD H, (HL)
-            0x6E -> executeLdRegisterFromHL(::setL) // LD L, (HL)
-            0x70 -> executeLdHLFromRegister(registers.b) // LD (HL), B
-            0x71 -> executeLdHLFromRegister(registers.c) // LD (HL), C
-            0x72 -> executeLdHLFromRegister(registers.d) // LD (HL), D
-            0x73 -> executeLdHLFromRegister(registers.e) // LD (HL), E
-            0x74 -> executeLdHLFromRegister(registers.h) // LD (HL), H
-            0x75 -> executeLdHLFromRegister(registers.l) // LD (HL), L
+            0x46 -> {
+                executeLdRegisterFromHL(::setB)
+            }
+
+            // LD B, (HL)
+            0x4E -> {
+                executeLdRegisterFromHL(::setC)
+            }
+
+            // LD C, (HL)
+            0x56 -> {
+                executeLdRegisterFromHL(::setD)
+            }
+
+            // LD D, (HL)
+            0x5E -> {
+                executeLdRegisterFromHL(::setE)
+            }
+
+            // LD E, (HL)
+            0x66 -> {
+                executeLdRegisterFromHL(::setH)
+            }
+
+            // LD H, (HL)
+            0x6E -> {
+                executeLdRegisterFromHL(::setL)
+            }
+
+            // LD L, (HL)
+            0x70 -> {
+                executeLdHLFromRegister(registers.b)
+            }
+
+            // LD (HL), B
+            0x71 -> {
+                executeLdHLFromRegister(registers.c)
+            }
+
+            // LD (HL), C
+            0x72 -> {
+                executeLdHLFromRegister(registers.d)
+            }
+
+            // LD (HL), D
+            0x73 -> {
+                executeLdHLFromRegister(registers.e)
+            }
+
+            // LD (HL), E
+            0x74 -> {
+                executeLdHLFromRegister(registers.h)
+            }
+
+            // LD (HL), H
+            0x75 -> {
+                executeLdHLFromRegister(registers.l)
+            }
+
+            // LD (HL), L
             // 0x76 は HALT（別途実装予定）
             // レジスタ間コピー（A -> その他）
-            0x47 -> executeLdRegister(::setB, registers.a) // LD B, A
-            0x4F -> executeLdRegister(::setC, registers.a) // LD C, A
-            0x57 -> executeLdRegister(::setD, registers.a) // LD D, A
-            0x5F -> executeLdRegister(::setE, registers.a) // LD E, A
-            0x67 -> executeLdRegister(::setH, registers.a) // LD H, A
-            0x6F -> executeLdRegister(::setL, registers.a) // LD L, A
+            0x47 -> {
+                executeLdRegister(::setB, registers.a)
+            }
+
+            // LD B, A
+            0x4F -> {
+                executeLdRegister(::setC, registers.a)
+            }
+
+            // LD C, A
+            0x57 -> {
+                executeLdRegister(::setD, registers.a)
+            }
+
+            // LD D, A
+            0x5F -> {
+                executeLdRegister(::setE, registers.a)
+            }
+
+            // LD E, A
+            0x67 -> {
+                executeLdRegister(::setH, registers.a)
+            }
+
+            // LD H, A
+            0x6F -> {
+                executeLdRegister(::setL, registers.a)
+            }
+
+            // LD L, A
             // レジスタ間コピー（その他 -> A）
-            0x78 -> executeLdRegister(::setA, registers.b) // LD A, B
-            0x79 -> executeLdRegister(::setA, registers.c) // LD A, C
-            0x7A -> executeLdRegister(::setA, registers.d) // LD A, D
-            0x7B -> executeLdRegister(::setA, registers.e) // LD A, E
-            0x7C -> executeLdRegister(::setA, registers.h) // LD A, H
-            0x7D -> executeLdRegister(::setA, registers.l) // LD A, L
+            0x78 -> {
+                executeLdRegister(::setA, registers.b)
+            }
+
+            // LD A, B
+            0x79 -> {
+                executeLdRegister(::setA, registers.c)
+            }
+
+            // LD A, C
+            0x7A -> {
+                executeLdRegister(::setA, registers.d)
+            }
+
+            // LD A, D
+            0x7B -> {
+                executeLdRegister(::setA, registers.e)
+            }
+
+            // LD A, E
+            0x7C -> {
+                executeLdRegister(::setA, registers.h)
+            }
+
+            // LD A, H
+            0x7D -> {
+                executeLdRegister(::setA, registers.l)
+            }
+
+            // LD A, L
             // レジスタ間コピー（B, C, D, E, H, L 同士）
             // B 行
-            0x40 -> executeLdRegister(::setB, registers.b) // LD B, B
-            0x41 -> executeLdRegister(::setB, registers.c) // LD B, C
-            0x42 -> executeLdRegister(::setB, registers.d) // LD B, D
-            0x43 -> executeLdRegister(::setB, registers.e) // LD B, E
-            0x44 -> executeLdRegister(::setB, registers.h) // LD B, H
-            0x45 -> executeLdRegister(::setB, registers.l) // LD B, L
+            0x40 -> {
+                executeLdRegister(::setB, registers.b)
+            }
+
+            // LD B, B
+            0x41 -> {
+                executeLdRegister(::setB, registers.c)
+            }
+
+            // LD B, C
+            0x42 -> {
+                executeLdRegister(::setB, registers.d)
+            }
+
+            // LD B, D
+            0x43 -> {
+                executeLdRegister(::setB, registers.e)
+            }
+
+            // LD B, E
+            0x44 -> {
+                executeLdRegister(::setB, registers.h)
+            }
+
+            // LD B, H
+            0x45 -> {
+                executeLdRegister(::setB, registers.l)
+            }
+
+            // LD B, L
             // C 行
-            0x48 -> executeLdRegister(::setC, registers.b) // LD C, B
-            0x49 -> executeLdRegister(::setC, registers.c) // LD C, C
-            0x4A -> executeLdRegister(::setC, registers.d) // LD C, D
-            0x4B -> executeLdRegister(::setC, registers.e) // LD C, E
-            0x4C -> executeLdRegister(::setC, registers.h) // LD C, H
-            0x4D -> executeLdRegister(::setC, registers.l) // LD C, L
+            0x48 -> {
+                executeLdRegister(::setC, registers.b)
+            }
+
+            // LD C, B
+            0x49 -> {
+                executeLdRegister(::setC, registers.c)
+            }
+
+            // LD C, C
+            0x4A -> {
+                executeLdRegister(::setC, registers.d)
+            }
+
+            // LD C, D
+            0x4B -> {
+                executeLdRegister(::setC, registers.e)
+            }
+
+            // LD C, E
+            0x4C -> {
+                executeLdRegister(::setC, registers.h)
+            }
+
+            // LD C, H
+            0x4D -> {
+                executeLdRegister(::setC, registers.l)
+            }
+
+            // LD C, L
             // D 行
-            0x50 -> executeLdRegister(::setD, registers.b) // LD D, B
-            0x51 -> executeLdRegister(::setD, registers.c) // LD D, C
-            0x52 -> executeLdRegister(::setD, registers.d) // LD D, D
-            0x53 -> executeLdRegister(::setD, registers.e) // LD D, E
-            0x54 -> executeLdRegister(::setD, registers.h) // LD D, H
-            0x55 -> executeLdRegister(::setD, registers.l) // LD D, L
+            0x50 -> {
+                executeLdRegister(::setD, registers.b)
+            }
+
+            // LD D, B
+            0x51 -> {
+                executeLdRegister(::setD, registers.c)
+            }
+
+            // LD D, C
+            0x52 -> {
+                executeLdRegister(::setD, registers.d)
+            }
+
+            // LD D, D
+            0x53 -> {
+                executeLdRegister(::setD, registers.e)
+            }
+
+            // LD D, E
+            0x54 -> {
+                executeLdRegister(::setD, registers.h)
+            }
+
+            // LD D, H
+            0x55 -> {
+                executeLdRegister(::setD, registers.l)
+            }
+
+            // LD D, L
             // E 行
-            0x58 -> executeLdRegister(::setE, registers.b) // LD E, B
-            0x59 -> executeLdRegister(::setE, registers.c) // LD E, C
-            0x5A -> executeLdRegister(::setE, registers.d) // LD E, D
-            0x5B -> executeLdRegister(::setE, registers.e) // LD E, E
-            0x5C -> executeLdRegister(::setE, registers.h) // LD E, H
-            0x5D -> executeLdRegister(::setE, registers.l) // LD E, L
+            0x58 -> {
+                executeLdRegister(::setE, registers.b)
+            }
+
+            // LD E, B
+            0x59 -> {
+                executeLdRegister(::setE, registers.c)
+            }
+
+            // LD E, C
+            0x5A -> {
+                executeLdRegister(::setE, registers.d)
+            }
+
+            // LD E, D
+            0x5B -> {
+                executeLdRegister(::setE, registers.e)
+            }
+
+            // LD E, E
+            0x5C -> {
+                executeLdRegister(::setE, registers.h)
+            }
+
+            // LD E, H
+            0x5D -> {
+                executeLdRegister(::setE, registers.l)
+            }
+
+            // LD E, L
             // H 行
-            0x60 -> executeLdRegister(::setH, registers.b) // LD H, B
-            0x61 -> executeLdRegister(::setH, registers.c) // LD H, C
-            0x62 -> executeLdRegister(::setH, registers.d) // LD H, D
-            0x63 -> executeLdRegister(::setH, registers.e) // LD H, E
-            0x64 -> executeLdRegister(::setH, registers.h) // LD H, H
-            0x65 -> executeLdRegister(::setH, registers.l) // LD H, L
+            0x60 -> {
+                executeLdRegister(::setH, registers.b)
+            }
+
+            // LD H, B
+            0x61 -> {
+                executeLdRegister(::setH, registers.c)
+            }
+
+            // LD H, C
+            0x62 -> {
+                executeLdRegister(::setH, registers.d)
+            }
+
+            // LD H, D
+            0x63 -> {
+                executeLdRegister(::setH, registers.e)
+            }
+
+            // LD H, E
+            0x64 -> {
+                executeLdRegister(::setH, registers.h)
+            }
+
+            // LD H, H
+            0x65 -> {
+                executeLdRegister(::setH, registers.l)
+            }
+
+            // LD H, L
             // L 行
-            0x68 -> executeLdRegister(::setL, registers.b) // LD L, B
-            0x69 -> executeLdRegister(::setL, registers.c) // LD L, C
-            0x6A -> executeLdRegister(::setL, registers.d) // LD L, D
-            0x6B -> executeLdRegister(::setL, registers.e) // LD L, E
-            0x6C -> executeLdRegister(::setL, registers.h) // LD L, H
-            0x6D -> executeLdRegister(::setL, registers.l) // LD L, L
+            0x68 -> {
+                executeLdRegister(::setL, registers.b)
+            }
+
+            // LD L, B
+            0x69 -> {
+                executeLdRegister(::setL, registers.c)
+            }
+
+            // LD L, C
+            0x6A -> {
+                executeLdRegister(::setL, registers.d)
+            }
+
+            // LD L, D
+            0x6B -> {
+                executeLdRegister(::setL, registers.e)
+            }
+
+            // LD L, E
+            0x6C -> {
+                executeLdRegister(::setL, registers.h)
+            }
+
+            // LD L, H
+            0x6D -> {
+                executeLdRegister(::setL, registers.l)
+            }
+
+            // LD L, L
             // A 行の自己コピー
-            0x7F -> executeLdRegister(::setA, registers.a) // LD A, A
+            0x7F -> {
+                executeLdRegister(::setA, registers.a)
+            }
+
+            // LD A, A
+
+            // 未定義オペコード（LR35902 固有の未使用スロット）は 1 バイト NOP として扱う
+            0xD3, // Undefined
+            0xDB, // Undefined
+            0xDD, // Undefined
+            0xE4, // Undefined
+            0xEB, // Undefined
+            0xEC, // Undefined
+            0xED, // Undefined
+            0xF4, // Undefined
+            0xFC, // Undefined
+            0xFD, // Undefined
+            -> {
+                executeNop()
+            }
+
             else -> {
                 try {
                     Log.e(
@@ -663,26 +1653,6 @@ class Cpu(
     }
 
     /**
-     * LD (SP), HL 命令: [SP] ← HL。
-     *
-     * - オペコード: 0xE3
-     * - フラグ: 変更なし
-     * - サイクル数: 8（実機の仕様）
-     * - 動作: SPレジスタが指すアドレスにHLレジスタの値を書き込む
-     */
-    private fun executeLdSpFromHlIndirect(): Int {
-        val address = registers.sp
-        val hl = registers.hl.toInt()
-        val low = (hl and 0xFF).toUByte()
-        val high = ((hl shr 8) and 0xFF).toUByte()
-
-        bus.writeByte(address, low)
-        bus.writeByte((address.toInt() + 1).toUShort(), high)
-
-        return Cycles.LD_SP_HL // 8サイクル（実機の仕様）
-    }
-
-    /**
      * LD (nn), SP 命令: メモリ [nn] に SP を保存。
      *
      * - オペコード: 0x08
@@ -845,6 +1815,7 @@ class Cpu(
                 registers.flagH = (aInt and 0x0F) + (bInt and 0x0F) > 0x0F
                 registers.flagC = sum > 0xFF
             }
+
             AluOp.ADC -> {
                 val carry = if (registers.flagC) 1 else 0
                 val sum = aInt + bInt + carry
@@ -855,6 +1826,7 @@ class Cpu(
                 registers.flagH = (aInt and 0x0F) + (bInt and 0x0F) + carry > 0x0F
                 registers.flagC = sum > 0xFF
             }
+
             AluOp.SUB, AluOp.CP -> {
                 val diff = aInt - bInt
                 val result = diff and 0xFF
@@ -866,6 +1838,7 @@ class Cpu(
                 registers.flagH = (aInt and 0x0F) < (bInt and 0x0F)
                 registers.flagC = aInt < bInt
             }
+
             AluOp.SBC -> {
                 val carry = if (registers.flagC) 1 else 0
                 val diff = aInt - bInt - carry
@@ -876,6 +1849,7 @@ class Cpu(
                 registers.flagH = (aInt and 0x0F) < ((bInt and 0x0F) + carry)
                 registers.flagC = aInt < bInt + carry
             }
+
             AluOp.AND -> {
                 val result = (aInt and bInt) and 0xFF
                 registers.a = result.toUByte()
@@ -884,6 +1858,7 @@ class Cpu(
                 registers.flagH = true
                 registers.flagC = false
             }
+
             AluOp.OR -> {
                 val result = (aInt or bInt) and 0xFF
                 registers.a = result.toUByte()
@@ -892,6 +1867,7 @@ class Cpu(
                 registers.flagH = false
                 registers.flagC = false
             }
+
             AluOp.XOR -> {
                 val result = (aInt xor bInt) and 0xFF
                 registers.a = result.toUByte()
@@ -1333,34 +2309,40 @@ class Cpu(
                 carry = (v and 0x80) != 0
                 result = ((v shl 1) and 0xFF) or if (carry) 0x01 else 0x00
             }
+
             1 -> {
                 // RRC: 右ローテート、bit0 -> C と bit7
                 carry = (v and 0x01) != 0
                 result = (v ushr 1) or if (carry) 0x80 else 0x00
             }
+
             2 -> {
                 // RL: C を巻き込みつつ左ローテート
                 val oldCarry = if (registers.flagC) 1 else 0
                 carry = (v and 0x80) != 0
                 result = ((v shl 1) and 0xFF) or oldCarry
             }
+
             3 -> {
                 // RR: C を巻き込みつつ右ローテート
                 val oldCarry = if (registers.flagC) 1 else 0
                 carry = (v and 0x01) != 0
                 result = (v ushr 1) or (oldCarry shl 7)
             }
+
             4 -> {
                 // SLA: 算術左シフト（下位ビットは 0）
                 carry = (v and 0x80) != 0
                 result = (v shl 1) and 0xFF
             }
+
             5 -> {
                 // SRA: 算術右シフト（bit7 を保持）
                 carry = (v and 0x01) != 0
                 val msb = v and 0x80
                 result = (v ushr 1) or msb
             }
+
             6 -> {
                 // SWAP: 上位 4bit と下位 4bit を入れ替え
                 carry = false
@@ -1368,12 +2350,16 @@ class Cpu(
                 val low = (v and 0x0F) shl 4
                 result = (high or low) and 0xFF
             }
+
             7 -> {
                 // SRL: 論理右シフト（bit7 には 0 を入れる）
                 carry = (v and 0x01) != 0
                 result = (v ushr 1) and 0x7F
             }
-            else -> error("Unsupported CB rotate/shift y=$y")
+
+            else -> {
+                error("Unsupported CB rotate/shift y=$y")
+            }
         }
 
         val resByte = result.toUByte()

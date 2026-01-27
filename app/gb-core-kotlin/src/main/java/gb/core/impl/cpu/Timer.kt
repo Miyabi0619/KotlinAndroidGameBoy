@@ -32,6 +32,11 @@ class Timer(
     // TIMA 用の内部カウンタ（CPU サイクル数）
     private var timaCounter: Int = 0
 
+    // TIMA オーバーフロー後の「遅延リロード」用カウンタ（CPU サイクル数）
+    // - オーバーフロー発生から 1 マシンサイクル後に TMA を再ロードし、TIMER 割り込みを要求する
+    private var timaOverflowDelayCycles: Int = -1
+    private var timaOverflowPending: Boolean = false
+
     fun readRegister(offset: Int): UByte =
         when (offset) {
             0 -> div
@@ -51,11 +56,29 @@ class Timer(
                 div = 0u
                 divCounter = 0
             }
-            1 -> tima = value
-            2 -> tma = value
+            1 -> {
+                // 実機では、オーバーフロー遅延中に TIMA へ書き込むとリロードがキャンセルされる
+                tima = value
+                timaOverflowPending = false
+                timaOverflowDelayCycles = -1
+            }
+            2 -> {
+                // TMA 書き込み。オーバーフロー遅延中に書き込まれた場合は、
+                // リロード時に新しい値が反映される（現在の実装はこの挙動を満たす）
+                tma = value
+            }
             3 -> {
                 // 下位 3bit のみ有効
+                val oldTac = tac
                 tac = (value and 0x07u)
+
+                // TAC の有効ビット／クロックソースが変わった場合は、内部カウンタをリセット
+                // （実機では DIV ビットに依存したエッジ検出だが、ここでは簡易モデルとする）
+                val oldBits = oldTac.toInt() and 0b111
+                val newBits = tac.toInt() and 0b111
+                if (oldBits != newBits) {
+                    timaCounter = 0
+                }
             }
             else -> error("Invalid timer register offset: $offset")
         }
@@ -76,6 +99,19 @@ class Timer(
             div = (div + 1u).toUByte()
         }
 
+        // TIMA オーバーフロー後の「遅延リロード」を処理
+        if (timaOverflowPending) {
+            timaOverflowDelayCycles -= cycles
+            if (timaOverflowDelayCycles <= 0) {
+                timaOverflowPending = false
+                timaOverflowDelayCycles = -1
+
+                // オーバーフロー完了: TMA を TIMA にリロードし、TIMER 割り込みを要求
+                tima = tma
+                interruptController.request(InterruptController.Type.TIMER)
+            }
+        }
+
         // TAC bit2 が 1 のときだけ TIMA 有効
         if ((tac.toInt() and 0b100) == 0) {
             return
@@ -94,8 +130,12 @@ class Timer(
         while (timaCounter >= period) {
             timaCounter -= period
             if (tima == 0xFFu.toUByte()) {
-                tima = tma
-                interruptController.request(InterruptController.Type.TIMER)
+                // オーバーフロー。即座に 0 にし、1 マシンサイクル遅延後に TMA をリロードする。
+                tima = 0u
+                if (!timaOverflowPending) {
+                    timaOverflowPending = true
+                    timaOverflowDelayCycles = 4 // 約 1 マシンサイクル相当
+                }
             } else {
                 tima = (tima + 1u).toUByte()
             }

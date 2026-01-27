@@ -142,6 +142,7 @@ private fun gameScreen(
                         romLoaded = true
                         errorMessage = null
                     }
+
                     is CoreResult.Error -> {
                         android.util.Log.e("GameLoop", "ROM load error: ${toErrorMessage(result.error)}")
                         romLoaded = false
@@ -159,21 +160,22 @@ private fun gameScreen(
             val audioFormat = AudioFormat.ENCODING_PCM_16BIT
             val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
 
-            AudioTrack.Builder()
+            AudioTrack
+                .Builder()
                 .setAudioAttributes(
-                    AudioAttributes.Builder()
+                    AudioAttributes
+                        .Builder()
                         .setUsage(AudioAttributes.USAGE_GAME)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build(),
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
+                ).setAudioFormat(
+                    AudioFormat
+                        .Builder()
                         .setSampleRate(sampleRate)
                         .setEncoding(audioFormat)
                         .setChannelMask(channelConfig)
                         .build(),
-                )
-                .setBufferSizeInBytes(bufferSize)
+                ).setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
         }
@@ -261,6 +263,7 @@ private fun gameScreen(
                         )
                     }
                 }
+
                 is CoreResult.Error -> {
                     android.util.Log.e("GameLoop", "Error in frame: ${toErrorMessage(result.error)}")
                     errorMessage = toErrorMessage(result.error)
@@ -462,9 +465,18 @@ private fun mergeInput(
 
 private fun toErrorMessage(error: CoreError): String =
     when (error) {
-        is CoreError.RomNotLoaded -> "ROM がロードされていません。"
-        is CoreError.InvalidRom -> "ROM が不正です: ${error.reason}"
-        is CoreError.IllegalState -> "エミュレータの状態が不正です: ${error.message}"
+        is CoreError.RomNotLoaded -> {
+            "ROM がロードされていません。"
+        }
+
+        is CoreError.InvalidRom -> {
+            "ROM が不正です: ${error.reason}"
+        }
+
+        is CoreError.IllegalState -> {
+            "エミュレータの状態が不正です: ${error.message}"
+        }
+
         is CoreError.InternalError -> {
             val cause = error.cause
             val message = cause?.message ?: "不明なエラー"

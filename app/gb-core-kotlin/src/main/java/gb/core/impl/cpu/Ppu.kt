@@ -40,7 +40,9 @@ class Ppu(
     /**
      * PPUモード（STATレジスタのbit 0-1）
      */
-    private enum class PpuMode(val value: Int) {
+    private enum class PpuMode(
+        val value: Int,
+    ) {
         HBLANK(0), // Mode 0: 水平ブランク期間
         VBLANK(1), // Mode 1: 垂直ブランク期間
         OAM_SEARCH(2), // Mode 2: OAM検索期間
@@ -76,13 +78,32 @@ class Ppu(
         private set
 
     /**
+     * 現在のモードにおいて、CPU から VRAM へアクセス可能かどうか。
+     *
+     * - 実機では Mode 3（PIXEL_TRANSFER）中は VRAM 読み書き不可。
+     */
+    fun isVramAccessible(): Boolean = currentMode != PpuMode.PIXEL_TRANSFER
+
+    /**
+     * 現在のモードにおいて、CPU から OAM へアクセス可能かどうか。
+     *
+     * - 実機では Mode 2（OAM_SEARCH）および Mode 3 中は OAM 読み書き不可。
+     */
+    fun isOamAccessible(): Boolean =
+        currentMode != PpuMode.OAM_SEARCH && currentMode != PpuMode.PIXEL_TRANSFER
+
+    /**
      * PPU I/O レジスタの読み取り。
      *
      * @param offset 0xFF40 からのオフセット（0-11）
      */
     fun readRegister(offset: Int): UByte =
         when (offset) {
-            0x00 -> lcdc // 0xFF40
+            0x00 -> {
+                lcdc
+            }
+
+            // 0xFF40
             0x01 -> {
                 // 0xFF41 (STAT): 現在のモードとLYC=LYフラグを反映
                 val currentModeBits = currentMode.value.toUByte()
@@ -92,17 +113,60 @@ class Ppu(
                 val result = (statUpper.toInt() or currentModeBits.toInt() or lycMatchBit.toInt()) and 0xFF
                 result.toUByte()
             }
-            0x02 -> scy // 0xFF42
-            0x03 -> scx // 0xFF43
-            0x04 -> ly // 0xFF44 (読み取り専用)
-            0x05 -> lyc // 0xFF45
-            0x06 -> dma // 0xFF46 (読み取りは意味がないが、値を返す)
-            0x07 -> bgp // 0xFF47
-            0x08 -> obp0 // 0xFF48
-            0x09 -> obp1 // 0xFF49
-            0x0A -> wy // 0xFF4A
-            0x0B -> wx // 0xFF4B
-            else -> 0xFFu
+
+            0x02 -> {
+                scy
+            }
+
+            // 0xFF42
+            0x03 -> {
+                scx
+            }
+
+            // 0xFF43
+            0x04 -> {
+                ly
+            }
+
+            // 0xFF44 (読み取り専用)
+            0x05 -> {
+                lyc
+            }
+
+            // 0xFF45
+            0x06 -> {
+                dma
+            }
+
+            // 0xFF46 (読み取りは意味がないが、値を返す)
+            0x07 -> {
+                bgp
+            }
+
+            // 0xFF47
+            0x08 -> {
+                obp0
+            }
+
+            // 0xFF48
+            0x09 -> {
+                obp1
+            }
+
+            // 0xFF49
+            0x0A -> {
+                wy
+            }
+
+            // 0xFF4A
+            0x0B -> {
+                wx
+            }
+
+            // 0xFF4B
+            else -> {
+                0xFFu
+            }
         }
 
     /**
@@ -116,14 +180,35 @@ class Ppu(
         value: UByte,
     ) {
         when (offset) {
-            0x00 -> lcdc = value // 0xFF40
-            0x01 -> stat = value and 0xF8u // 0xFF41 (下位3bitは読み取り専用)
-            0x02 -> scy = value // 0xFF42
-            0x03 -> scx = value // 0xFF43
+            0x00 -> {
+                lcdc = value
+            }
+
+            // 0xFF40
+            0x01 -> {
+                stat = value and 0xF8u
+            }
+
+            // 0xFF41 (下位3bitは読み取り専用)
+            0x02 -> {
+                scy = value
+            }
+
+            // 0xFF42
+            0x03 -> {
+                scx = value
+            }
+
+            // 0xFF43
             0x04 -> {
                 // 0xFF44 (LY) は読み取り専用、書き込みは無視
             }
-            0x05 -> lyc = value // 0xFF45
+
+            0x05 -> {
+                lyc = value
+            }
+
+            // 0xFF45
             0x06 -> {
                 // 0xFF46 (DMA) - OAM DMA転送を開始
                 // 値は転送元アドレスの上位バイト（例: 0xC0 → 0xC000）
@@ -132,11 +217,30 @@ class Ppu(
                 dmaActive = true
                 dmaCyclesRemaining = 160 // 160サイクルで転送完了
             }
-            0x07 -> bgp = value // 0xFF47
-            0x08 -> obp0 = value // 0xFF48
-            0x09 -> obp1 = value // 0xFF49
-            0x0A -> wy = value // 0xFF4A
-            0x0B -> wx = value // 0xFF4B
+
+            0x07 -> {
+                bgp = value
+            }
+
+            // 0xFF47
+            0x08 -> {
+                obp0 = value
+            }
+
+            // 0xFF48
+            0x09 -> {
+                obp1 = value
+            }
+
+            // 0xFF49
+            0x0A -> {
+                wy = value
+            }
+
+            // 0xFF4A
+            0x0B -> {
+                wx = value
+            } // 0xFF4B
         }
     }
 
@@ -164,11 +268,15 @@ class Ppu(
             }
         }
 
-        // LCDが無効な場合は、Mode 0（HBlank）に設定して終了
+        // LCDが無効な場合は、PPUをリセット状態に保つ
         val lcdEnabled = (lcdc.toInt() and 0x80) != 0
         if (!lcdEnabled) {
+            // 実機では LCD を OFF にすると LY は 0 にリセットされ、PPU は停止する
             currentMode = PpuMode.HBLANK
             modeCycles = 0
+            scanlineCycles = 0
+            previousLy = 0u
+            ly = 0u
             return
         }
 
@@ -217,6 +325,7 @@ class Ppu(
                         setMode(PpuMode.PIXEL_TRANSFER)
                     }
                 }
+
                 PpuMode.PIXEL_TRANSFER -> {
                     // Mode 3: Pixel Transfer（172-289サイクル、簡易実装として200サイクル）
                     if (modeCycles >= 200) {
@@ -225,10 +334,12 @@ class Ppu(
                         checkStatInterrupt(PpuMode.HBLANK)
                     }
                 }
+
                 PpuMode.HBLANK -> {
                     // Mode 0: HBlank（残りのサイクル）
                     // スキャンライン終了処理はループの先頭で行う
                 }
+
                 PpuMode.VBLANK -> {
                     // Mode 1: VBlank（10スキャンライン）
                     // スキャンライン終了処理はループの先頭で行う
@@ -326,9 +437,15 @@ class Ppu(
             IntArray(4) { colorId ->
                 val paletteEntry = (bgpInt shr (colorId * 2)) and 0x03
                 when (paletteEntry) {
-                    0 -> 0xFFFFFFFF.toInt() // 白
-                    1 -> 0xFFAAAAAA.toInt() // 薄いグレー
-                    2 -> 0xFF555555.toInt() // 濃いグレー
+                    0 -> 0xFFFFFFFF.toInt()
+
+                    // 白
+                    1 -> 0xFFAAAAAA.toInt()
+
+                    // 薄いグレー
+                    2 -> 0xFF555555.toInt()
+
+                    // 濃いグレー
                     else -> 0xFF000000.toInt() // 黒
                 }
             }
@@ -530,9 +647,15 @@ class Ppu(
             IntArray(4) { colorId ->
                 val paletteEntry = (obp0Int shr (colorId * 2)) and 0x03
                 when (paletteEntry) {
-                    0 -> 0xFFFFFFFF.toInt() // 白（透明）
-                    1 -> 0xFFAAAAAA.toInt() // 薄いグレー
-                    2 -> 0xFF555555.toInt() // 濃いグレー
+                    0 -> 0xFFFFFFFF.toInt()
+
+                    // 白（透明）
+                    1 -> 0xFFAAAAAA.toInt()
+
+                    // 薄いグレー
+                    2 -> 0xFF555555.toInt()
+
+                    // 濃いグレー
                     else -> 0xFF000000.toInt() // 黒
                 }
             }
@@ -540,9 +663,15 @@ class Ppu(
             IntArray(4) { colorId ->
                 val paletteEntry = (obp1Int shr (colorId * 2)) and 0x03
                 when (paletteEntry) {
-                    0 -> 0xFFFFFFFF.toInt() // 白（透明）
-                    1 -> 0xFFAAAAAA.toInt() // 薄いグレー
-                    2 -> 0xFF555555.toInt() // 濃いグレー
+                    0 -> 0xFFFFFFFF.toInt()
+
+                    // 白（透明）
+                    1 -> 0xFFAAAAAA.toInt()
+
+                    // 薄いグレー
+                    2 -> 0xFF555555.toInt()
+
+                    // 濃いグレー
                     else -> 0xFF000000.toInt() // 黒
                 }
             }
@@ -669,9 +798,15 @@ class Ppu(
 
         // Game Boyの4階調グレースケールパレット
         return when (paletteEntry) {
-            0 -> 0xFFFFFFFF.toInt() // 白
-            1 -> 0xFFAAAAAA.toInt() // 薄いグレー
-            2 -> 0xFF555555.toInt() // 濃いグレー
+            0 -> 0xFFFFFFFF.toInt()
+
+            // 白
+            1 -> 0xFFAAAAAA.toInt()
+
+            // 薄いグレー
+            2 -> 0xFF555555.toInt()
+
+            // 濃いグレー
             else -> 0xFF000000.toInt() // 黒
         }
     }

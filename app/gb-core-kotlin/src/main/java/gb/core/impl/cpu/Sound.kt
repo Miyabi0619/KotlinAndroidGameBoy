@@ -78,6 +78,11 @@ class Sound {
     private var frameStartSoundCycle: Double = 0.0 // フレーム開始時点のサウンドサイクル
     private val maxSoundCycle = 1e9 // 正規化用の最大値（約19時間分）
 
+    // フレームシーケンサ（512Hz = SOUND_FREQUENCY / 512）
+    // 8ステップ（0-7）で Length / Sweep / Envelope を更新する
+    private var frameSequencerCounter: Double = 0.0 // サウンドサイクル単位
+    private var frameSequencerStep: Int = 0
+
     // チャンネルの内部状態
     private val square1State = SquareChannelState()
     private val square2State = SquareChannelState()
@@ -118,8 +123,8 @@ class Sound {
                 val frequency = ((nr34.toInt() and 0x07) shl 8) or nr33.toInt()
 
                 if (frequency > 0 && frequency < 2048) {
-                    // 周期を計算
-                    val period = (2048.0 - frequency) * 8.0
+                    // 周期を計算（Waveチャンネル本体と同じ *16.0 を使用）
+                    val period = (2048.0 - frequency) * 16.0
                     if (period > 0) {
                         // 現在再生中のサンプル位置を計算（32サンプル中）
                         // soundCycleCounterから現在の位置を計算
@@ -209,6 +214,7 @@ class Sound {
                 val newValue = (value and 0x3Fu.toUByte()) or (currentValue and 0xC0u.toUByte())
                 soundRegs[offset] = newValue
             }
+
             0x16, // NR52 (Sound Control)
             -> {
                 // bit 0-6 は読み取り専用、bit 7 のみ書き込み可能
@@ -226,6 +232,7 @@ class Sound {
                     sweepEnabled = false
                 }
             }
+
             else -> {
                 soundRegs[offset] = value
             }
@@ -236,12 +243,14 @@ class Sound {
             0x01 -> { // NR11 (Square 1 Length & Duty)
                 square1State.lengthCounter = 64 - (value.toInt() and 0x3F)
             }
+
             0x02 -> { // NR12 (Square 1 Volume & Envelope)
                 square1State.envelopeVolume = (value.toInt() shr 4) and 0x0F
                 square1State.envelopePeriod = value.toInt() and 0x07
                 square1State.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
                 square1State.envelopeCounter = 0
             }
+
             0x04 -> { // NR14 (Square 1 Frequency High & Trigger)
                 if ((value.toInt() and 0x80) != 0) {
                     // チャンネルを有効化
@@ -273,15 +282,18 @@ class Sound {
                     sweepInitialized = false // 最初の更新を遅延させる
                 }
             }
+
             0x05 -> { // NR21 (Square 2 Length & Duty)
                 square2State.lengthCounter = 64 - (value.toInt() and 0x3F)
             }
+
             0x06 -> { // NR22 (Square 2 Volume & Envelope)
                 square2State.envelopeVolume = (value.toInt() shr 4) and 0x0F
                 square2State.envelopePeriod = value.toInt() and 0x07
                 square2State.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
                 square2State.envelopeCounter = 0
             }
+
             0x08 -> { // NR24 (Square 2 Frequency High & Trigger)
                 if ((value.toInt() and 0x80) != 0) {
                     square2State.enabled = true
@@ -302,6 +314,7 @@ class Sound {
                     }
                 }
             }
+
             0x0A -> { // NR30 (Wave Enable)
                 // Bit 7: Wave enable (1=有効, 0=無効)
                 val waveEnabled = (value.toInt() and 0x80) != 0
@@ -310,19 +323,30 @@ class Sound {
                 }
                 // Waveチャンネルの有効化はNR34のTriggerで行う
             }
+
             0x0B -> { // NR31 (Wave Length)
                 waveState.lengthCounter = 256 - value.toInt()
             }
+
             0x0C -> { // NR32 (Wave Volume)
                 waveState.volumeShift =
                     when ((value.toInt() shr 5) and 0x03) {
-                        0 -> 4 // 無音
-                        1 -> 0 // 100%
-                        2 -> 1 // 50%
-                        3 -> 2 // 25%
+                        0 -> 4
+
+                        // 無音
+                        1 -> 0
+
+                        // 100%
+                        2 -> 1
+
+                        // 50%
+                        3 -> 2
+
+                        // 25%
                         else -> 4
                     }
             }
+
             0x0E -> { // NR34 (Wave Frequency High & Trigger)
                 if ((value.toInt() and 0x80) != 0) {
                     // NR30のWave Enableをチェック
@@ -346,18 +370,22 @@ class Sound {
                     }
                 }
             }
+
             0x11 -> { // NR41 (Noise Length)
                 noiseState.lengthCounter = 64 - (value.toInt() and 0x3F)
             }
+
             0x12 -> { // NR42 (Noise Volume & Envelope)
                 noiseState.envelopeVolume = (value.toInt() shr 4) and 0x0F
                 noiseState.envelopePeriod = value.toInt() and 0x07
                 noiseState.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
                 noiseState.envelopeCounter = 0
             }
+
             0x13 -> { // NR43 (Noise Polynomial)
                 // LFSRの設定はサンプル生成時に使用
             }
+
             0x14 -> { // NR44 (Noise Trigger)
                 if ((value.toInt() and 0x80) != 0) {
                     noiseState.enabled = true
@@ -382,6 +410,7 @@ class Sound {
                     }
                 }
             }
+
             0x00 -> { // NR10 (Square 1 Sweep)
                 sweepPeriod = ((value.toInt() shr 4) and 0x07)
                 sweepNegate = (value.toInt() and 0x08) != 0
@@ -416,10 +445,11 @@ class Sound {
             frameStartSoundCycle = 0.0
         }
 
-        // 長さカウンタのみを更新（エンベロープとスイープはgenerateSamples()で更新）
-        // これにより、サンプル生成のタイミングと同期が取れる
-        val soundCycles = soundCyclesDouble.toInt().coerceAtLeast(0)
-        updateLengthCounters(soundCycles)
+        // フレームシーケンサ（512Hz）を進める
+        advanceFrameSequencer(soundCyclesDouble)
+
+        // Noise の LFSR は周波数に従って常時更新する（フレームシーケンサとは独立）
+        advanceNoiseLfsr(soundCyclesDouble)
     }
 
     /**
@@ -501,19 +531,6 @@ class Sound {
         // 1フレーム = 70224 CPUサイクル = 70224 / 8 = 8778 サウンドサイクル
         val cyclesPerFrame = 70224 / 8.0
 
-        // サンプル生成前に、エンベロープとスイープを更新（タイミング同期のため）
-        // 現在のサウンドサイクル位置を整数に変換して更新処理に渡す
-        val currentSoundCycles = (soundCycleCounter - frameStartSoundCycle).toInt().coerceAtLeast(0)
-        if (currentSoundCycles > 0) {
-            // エンベロープとスイープを更新（サンプル生成の前に実行）
-            updateSquare1Channel(currentSoundCycles)
-            updateSquare2Channel(currentSoundCycles)
-            updateWaveChannel(currentSoundCycles)
-            updateNoiseChannel(currentSoundCycles)
-            // Square 1のスイープ処理
-            updateSweep(currentSoundCycles)
-        }
-
         // 最初のフレームでは、現在のカウンタから1フレーム分を引く
         // より正確なタイミング計算のため、フレーム開始時点を正確に記録
         val currentFrameStart =
@@ -544,8 +561,8 @@ class Sound {
         // レジスタ読み取りをループ外に移動（パフォーマンス向上）
         val nr50 = soundRegs[0x14] // NR50 (Master Volume)
         val nr51 = soundRegs[0x15] // NR51 (Channel Select)
-        val leftVolume = ((nr50.toInt() shr 4) and 0x07) + 1
-        val rightVolume = (nr50.toInt() and 0x07) + 1
+        val leftVolume = (nr50.toInt() shr 4) and 0x07 // 0-7（0 はミュート）
+        val rightVolume = nr50.toInt() and 0x07 // 0-7（0 はミュート）
         val vinToLeft = (nr50.toInt() and 0x08) != 0 // Bit 3: SO1端子へのVin出力
         val vinToRight = (nr50.toInt() and 0x80) != 0 // Bit 7: SO2端子へのVin出力
         val nr51Int = nr51.toInt()
@@ -691,10 +708,18 @@ class Sound {
         val dutyCycle = (nr11.toInt() shr 6) and 0x03
         val dutyPattern =
             when (dutyCycle) {
-                0 -> 0b00000001 // 12.5% (1/8) - bit 0のみ
-                1 -> 0b00000011 // 25% (2/8) - bit 0-1
-                2 -> 0b00001111 // 50% (4/8) - bit 0-3
-                3 -> 0b11111100 // 75% (6/8) - bit 2-7（実機の仕様）
+                0 -> 0b00000001
+
+                // 12.5% (1/8) - bit 0のみ
+                1 -> 0b00000011
+
+                // 25% (2/8) - bit 0-1
+                2 -> 0b00001111
+
+                // 50% (4/8) - bit 0-3
+                3 -> 0b11111100
+
+                // 75% (6/8) - bit 2-7（実機の仕様）
                 else -> 0b00001111
             }
 
@@ -761,10 +786,18 @@ class Sound {
         val dutyCycle = (nr21.toInt() shr 6) and 0x03
         val dutyPattern =
             when (dutyCycle) {
-                0 -> 0b00000001 // 12.5% (1/8)
-                1 -> 0b00000011 // 25% (2/8)
-                2 -> 0b00001111 // 50% (4/8)
-                3 -> 0b11111100 // 75% (6/8) - bit 2-7（実機の仕様）
+                0 -> 0b00000001
+
+                // 12.5% (1/8)
+                1 -> 0b00000011
+
+                // 25% (2/8)
+                2 -> 0b00001111
+
+                // 50% (4/8)
+                3 -> 0b11111100
+
+                // 75% (6/8) - bit 2-7（実機の仕様）
                 else -> 0b00001111
             }
 
@@ -848,7 +881,8 @@ class Sound {
         val envelopePeriod = nr12.toInt() and 0x07
         if (envelopePeriod > 0 && square1State.enabled) {
             square1State.envelopeCounter += soundCycles
-            val envelopeStep = 8192 / envelopePeriod.coerceAtLeast(1)
+            // period は「何回の 64Hz クロックで 1 ステップ進むか」を表す
+            val envelopeStep = 8192 * envelopePeriod
             while (square1State.envelopeCounter >= envelopeStep) {
                 square1State.envelopeCounter -= envelopeStep
                 val direction = if ((nr12.toInt() and 0x08) != 0) 1 else -1
@@ -876,7 +910,8 @@ class Sound {
         val envelopePeriod = nr22.toInt() and 0x07
         if (envelopePeriod > 0 && square2State.enabled) {
             square2State.envelopeCounter += soundCycles
-            val envelopeStep = 8192 / envelopePeriod.coerceAtLeast(1)
+            // period は「何回の 64Hz クロックで 1 ステップ進むか」を表す
+            val envelopeStep = 8192 * envelopePeriod
             while (square2State.envelopeCounter >= envelopeStep) {
                 square2State.envelopeCounter -= envelopeStep
                 val direction = if ((nr22.toInt() and 0x08) != 0) 1 else -1
@@ -908,13 +943,13 @@ class Sound {
      */
     private fun updateNoiseChannel(soundCycles: Int) {
         val nr42 = soundRegs[0x11]
-        val nr43 = soundRegs[0x12]
 
         // エンベロープの更新（64Hz = 8192サウンドサイクルごと）
         val envelopePeriod = nr42.toInt() and 0x07
         if (envelopePeriod > 0 && noiseState.enabled) {
             noiseState.envelopeCounter += soundCycles
-            val envelopeStep = 8192 / envelopePeriod.coerceAtLeast(1)
+            // period は「何回の 64Hz クロックで 1 ステップ進むか」を表す
+            val envelopeStep = 8192 * envelopePeriod
             while (noiseState.envelopeCounter >= envelopeStep) {
                 noiseState.envelopeCounter -= envelopeStep
                 val direction = if ((nr42.toInt() and 0x08) != 0) 1 else -1
@@ -925,54 +960,101 @@ class Sound {
                 }
             }
         }
+    }
 
-        // LFSRの更新（ノイズ生成）
-        if (noiseState.enabled) {
-            // 仕様書: 周波数 = 524288 Hz / r / 2^(s+1)
-            // r = 0の場合、r = 0.5が代わりに使われる
-            // 周期 = r * 2^(s+1) / 524288 秒
-            // サウンドサイクル単位: r * 2^(s+1) * 8
-            val r = nr43.toInt() and 0x07
-            val s = (nr43.toInt() shr 4) and 0x0F
-            // 周期を計算（ただし、shiftが大きすぎる場合は制限）
-            val period =
-                if (s < 16) {
-                    if (r == 0) {
-                        // r = 0の場合、r = 0.5が代わりに使われる
-                        // 周期 = 0.5 * 2^(s+1) * 8 = 2^s * 8
-                        (1L shl s) * 8L
-                    } else {
-                        // r != 0の場合、周期 = r * 2^(s+1) * 8
-                        r.toLong() * (1L shl (s + 1)) * 8L
-                    }
-                } else {
-                    0L // 無効な値
+    /**
+     * フレームシーケンサ（512Hz）を進め、Length / Sweep / Envelope を更新する。
+     *
+     * - 512Hz ステップごとに frameSequencerStep (0-7) が進む。
+     * - ステップ 0,2,4,6: 256Hz Length カウンタ
+     * - ステップ 2,6: 128Hz Sweep（Square1）
+     * - ステップ 7: 64Hz Envelope（Square1/2/Noise）
+     */
+    private fun advanceFrameSequencer(soundCyclesDouble: Double) {
+        // 1ステップあたりのサウンドサイクル数（SOUND_FREQUENCY / 512Hz）
+        val stepCycles = SOUND_FREQUENCY / 512.0 // 1024.0 サウンドサイクル
+
+        frameSequencerCounter += soundCyclesDouble
+
+        while (frameSequencerCounter >= stepCycles) {
+            frameSequencerCounter -= stepCycles
+            frameSequencerStep = (frameSequencerStep + 1) and 0x07
+
+            when (frameSequencerStep) {
+                0, 2, 4, 6 -> {
+                    // 256Hz: Lengthカウンタ（全チャンネル）
+                    updateLengthCounters(2048)
                 }
+            }
 
-            if (period > 0) {
-                // 浮動小数点で累積（精度向上）
-                noiseState.lfsrCounterAccumulator += soundCycles.toDouble()
-                val periodDouble = period.toDouble()
-                while (noiseState.lfsrCounterAccumulator >= periodDouble) {
-                    noiseState.lfsrCounterAccumulator -= periodDouble
-
-                    // LFSRを更新
-                    // XOR = bit 0 XOR bit 1
-                    val xor = (noiseState.lfsr xor (noiseState.lfsr shr 1)) and 1
-                    noiseState.lfsr = noiseState.lfsr shr 1
-                    if (xor != 0) {
-                        noiseState.lfsr = noiseState.lfsr or 0x4000
-                    }
-
-                    // 7bitモード（bit 3がセットされている場合）
-                    if ((nr43.toInt() and 0x08) != 0) {
-                        noiseState.lfsr = noiseState.lfsr and 0x7F
-                    }
+            when (frameSequencerStep) {
+                2, 6 -> {
+                    // 128Hz: Square1 スイープ
+                    updateSweep(4096)
                 }
-                // 整数カウンタも更新（後方互換性のため）
-                noiseState.lfsrCounter = noiseState.lfsrCounterAccumulator.toInt()
+            }
+
+            if (frameSequencerStep == 7) {
+                // 64Hz: エンベロープ（Square1/2/Noise）
+                updateSquare1Channel(8192)
+                updateSquare2Channel(8192)
+                updateNoiseChannel(8192)
             }
         }
+    }
+
+    /**
+     * Noise の LFSR を周波数に従って進める（フレームシーケンサとは独立）。
+     */
+    private fun advanceNoiseLfsr(soundCyclesDouble: Double) {
+        if (!noiseState.enabled) {
+            return
+        }
+
+        val nr43 = soundRegs[0x12]
+
+        // 仕様: 周波数 = 524288 Hz / r / 2^(s+1)
+        // r = 0 の場合は 0.5
+        val r = nr43.toInt() and 0x07
+        val s = (nr43.toInt() shr 4) and 0x0F
+
+        val periodCycles =
+            if (s < 16) {
+                if (r == 0) {
+                    // 0.5 * 2^(s+1) * 8 = 2^s * 8
+                    (1L shl s) * 8L
+                } else {
+                    r.toLong() * (1L shl (s + 1)) * 8L
+                }
+            } else {
+                0L
+            }
+
+        if (periodCycles <= 0) {
+            return
+        }
+
+        noiseState.lfsrCounterAccumulator += soundCyclesDouble
+        val periodDouble = periodCycles.toDouble()
+
+        while (noiseState.lfsrCounterAccumulator >= periodDouble) {
+            noiseState.lfsrCounterAccumulator -= periodDouble
+
+            // XOR = bit 0 XOR bit 1
+            val xor = (noiseState.lfsr xor (noiseState.lfsr shr 1)) and 1
+            noiseState.lfsr = (noiseState.lfsr shr 1) and 0x7FFF
+            if (xor != 0) {
+                noiseState.lfsr = noiseState.lfsr or 0x4000
+            }
+
+            // 7bitモード: bit6 へフィードバックをコピー
+            if ((nr43.toInt() and 0x08) != 0) {
+                val bit0 = noiseState.lfsr and 0x01
+                noiseState.lfsr = (noiseState.lfsr and 0x7FBF) or (bit0 shl 6)
+            }
+        }
+
+        noiseState.lfsrCounter = noiseState.lfsrCounterAccumulator.toInt()
     }
 
     /**
@@ -1134,7 +1216,10 @@ class Sound {
 
         sweepCounter += soundCycles
         // 128Hz = 524288 / 128 = 4096サウンドサイクルごと
-        val sweepStep = 4096 / currentSweepPeriod.coerceAtLeast(1)
+        // period は「何回の 128Hz クロックで 1 ステップ進むか」を表す
+        // period=0 は 8 として扱う
+        val effectivePeriod = if (currentSweepPeriod == 0) 8 else currentSweepPeriod
+        val sweepStep = 4096 * effectivePeriod
         while (sweepCounter >= sweepStep) {
             sweepCounter -= sweepStep
 

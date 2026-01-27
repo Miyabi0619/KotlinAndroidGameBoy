@@ -67,26 +67,23 @@ class Machine(
     private fun handleInterrupts(): Int {
         val ifReg = interruptController.readIf()
         val ieReg = interruptController.readIe()
+        val pendingEnabled = (ifReg and ieReg)
 
         if (ifReg == 0u.toUByte()) {
             return 0
         }
 
-        // IMEが有効な場合、割り込みを処理
-        if (cpu.isInterruptsEnabled()) {
+        // IMEが有効な場合、IE/IFの両方で有効な割り込みだけを処理
+        if (cpu.isInterruptsEnabled() && pendingEnabled != 0u.toUByte()) {
             val pending = interruptController.nextPending(true)
             if (pending != null) {
                 return cpu.serviceInterrupt(pending)
             }
-            // IMEが有効でも、IEレジスタで許可されていない場合は割り込みを処理しない
-            // しかし、HALT状態の場合は解除する必要がある
         }
 
-        // HALT状態の場合、IFレジスタにフラグが立っていればHALT状態を解除
-        // （IMEが無効でも、またはIEレジスタが無効でも、HALT状態は解除される）
-        // 実機では、HALT状態でIMEが無効の場合、HALTバグが発生するが、ここでは簡略化
-        if (cpu.isHalted() && ifReg != 0u.toUByte()) {
-            // HALT状態を解除（割り込み待ちが完了）
+        // HALT/STOP状態の場合、有効な割り込み要求があれば状態を解除
+        // 実機では、IME=0でも IE/IF の両方で有効な割り込みが立てば HALT/STOP は解除される
+        if ((cpu.isHalted() || cpu.isStopped()) && pendingEnabled != 0u.toUByte()) {
             cpu.wakeFromHalt()
         }
 

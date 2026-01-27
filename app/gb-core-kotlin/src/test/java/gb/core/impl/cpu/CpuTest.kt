@@ -2004,9 +2004,7 @@ class CpuTest {
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {
-        override fun readByte(address: UShort): UByte {
-            return memory[address.toInt()]
-        }
+        override fun readByte(address: UShort): UByte = memory[address.toInt()]
 
         override fun writeByte(
             address: UShort,

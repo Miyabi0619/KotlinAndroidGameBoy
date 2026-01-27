@@ -56,8 +56,22 @@ class SystemBus(
 
     /**
      * その他 I/O レジスタ（FF50–FF7F）のバックアップ。
+     * - 0xFF50 はブートROM無効化レジスタ（DMGでは1回だけ使用される想定）
+     * - それ以外は現状 CGB 専用レジスタや未使用領域の簡易バックアップとして扱う
      */
     private val ioRegs: UByteArray = UByteArray(0x30) { 0u }
+
+    /**
+     * シリアルポートレジスタ（SB/SC）。
+     *
+     * - 0xFF01: SB（送受信データ）
+     * - 0xFF02: SC（制御; bit7=開始, bit0=クロックソース）
+     *
+     * 現在の実装では、リンクケーブルはサポートせず、
+     * 転送開始ビットが立ったタイミングで即座に転送完了＋割り込みを発生させる。
+     */
+    private var serialData: UByte = 0u // SB
+    private var serialControl: UByte = 0u // SC
 
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
@@ -66,18 +80,6 @@ class SystemBus(
 
     private fun readByteInternal(addr: Int): UByte =
         when {
-            // 0x38のアドレスに0xFF（RST 38H）がある場合は、無限ループを防ぐためRETI（0xD9）を返す
-            // これは、ROMの内容が0xFFの場合にのみ適用される（実機では通常RETIが配置される）
-            addr == 0x38 -> {
-                val index = mbc1?.mapRom0(addr) ?: addr
-                val romValue = rom.getOrElse(index) { 0xFFu }
-                // ROMの内容が0xFF（RST 38H）の場合は、RETI（0xD9）を返す
-                if (romValue == 0xFFu.toUByte()) {
-                    0xD9u.toUByte() // RETI命令
-                } else {
-                    romValue
-                }
-            }
             addr in 0x0000..0x3FFF -> {
                 val index = mbc1?.mapRom0(addr) ?: addr
                 rom.getOrElse(index) { 0xFFu }
@@ -86,7 +88,12 @@ class SystemBus(
                 val index = mbc1?.mapRomX(addr) ?: addr
                 rom.getOrElse(index) { 0xFFu }
             }
-            addr in 0x8000..0x9FFF -> vram[addr - 0x8000]
+            addr in 0x8000..0x9FFF ->
+                if (ppu.isVramAccessible()) {
+                    vram[addr - 0x8000]
+                } else {
+                    0xFFu
+                }
             addr in 0xA000..0xBFFF -> {
                 val ram = cartridgeRam ?: return 0xFFu
                 val ramIndex = mbc1?.mapRam(addr) ?: (addr - 0xA000)
@@ -106,10 +113,17 @@ class SystemBus(
                     0xFFu
                 }
             }
-            addr in 0xFE00..0xFE9F -> oam[addr - 0xFE00]
+            addr in 0xFE00..0xFE9F ->
+                if (ppu.isOamAccessible()) {
+                    oam[addr - 0xFE00]
+                } else {
+                    0xFFu
+                }
             addr in 0xFEA0..0xFEFF -> 0xFFu // 未使用領域
             addr == 0xFF00 -> joypad.read()
-            addr in 0xFF01..0xFF03 -> 0xFFu // シリアル通信（未実装）
+            addr == 0xFF01 -> serialData
+            addr == 0xFF02 -> serialControl
+            addr == 0xFF03 -> 0xFFu // 未使用
             addr in 0xFF04..0xFF07 -> {
                 // タイマレジスタ（DIV/TIMA/TMA/TAC）
                 val offset = addr - 0xFF04
@@ -127,7 +141,7 @@ class SystemBus(
                 val offset = addr - 0xFF10
                 sound.readRegister(offset)
             }
-            addr in 0xFF50..0xFF7F -> ioRegs[addr - 0xFF50] // その他I/O（未実装）
+            addr in 0xFF50..0xFF7F -> ioRegs[addr - 0xFF50] // その他I/O（FF50 など）
             addr in 0xFF80..0xFFFE -> hram[addr - 0xFF80]
             addr == 0xFFFF -> interruptController.readIe()
             else -> 0xFFu
@@ -144,8 +158,11 @@ class SystemBus(
                 mbc1?.writeControl(addr, value)
             }
             in 0x8000..0x9FFF -> {
-                val vramIndex = addr - 0x8000
-                vram[vramIndex] = value
+                // Mode 3（Pixel Transfer）中は VRAM への CPU アクセスは無視される
+                if (ppu.isVramAccessible()) {
+                    val vramIndex = addr - 0x8000
+                    vram[vramIndex] = value
+                }
             }
             in 0xA000..0xBFFF -> {
                 val ram = cartridgeRam ?: return
@@ -169,8 +186,8 @@ class SystemBus(
                 }
             }
             in 0xFE00..0xFE9F -> {
-                // DMA転送中は、OAMへの直接書き込みは無視される（実機の仕様）
-                if (!ppu.dmaActive) {
+                // DMA転送中、または Mode 2/3 中は、OAMへの直接書き込みは無視される（実機の仕様）
+                if (!ppu.dmaActive && ppu.isOamAccessible()) {
                     oam[addr - 0xFE00] = value
                 }
             }
@@ -179,6 +196,24 @@ class SystemBus(
             }
             0xFF00 -> {
                 joypad.write(value)
+            }
+            0xFF01 -> {
+                // SB: 送受信データ
+                serialData = value
+            }
+            0xFF02 -> {
+                // SC: 制御レジスタ
+                serialControl = value
+
+                // bit7 が 1 の場合、シリアル転送開始。
+                // 現在の実装では即時完了させ、SERIAL 割り込みを要求する。
+                if ((value.toInt() and 0x80) != 0) {
+                    // 実機では 8ビットシフト転送＋クロックに応じた遅延があるが、
+                    // ここでは簡易実装として即時完了させる。
+                    interruptController.request(InterruptController.Type.SERIAL)
+                    // 転送完了後、開始ビットをクリア（よくある実装）
+                    serialControl = (serialControl.toInt() and 0x7F).toUByte()
+                }
             }
             in 0xFF04..0xFF07 -> {
                 val offset = addr - 0xFF04
@@ -205,7 +240,10 @@ class SystemBus(
                 sound.writeRegister(offset, value)
             }
             in 0xFF50..0xFF7F -> {
-                ioRegs[addr - 0xFF50] = value // その他I/O（未実装）
+                // FF50 はブートROM無効化レジスタ。
+                // このエミュレータではブートROMを実装していないため、
+                // 値を記録するのみで実際のメモリマッピングには影響しない。
+                ioRegs[addr - 0xFF50] = value
             }
             in 0xFF80..0xFFFE -> {
                 hram[addr - 0xFF80] = value
