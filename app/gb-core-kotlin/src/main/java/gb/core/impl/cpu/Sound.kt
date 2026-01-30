@@ -264,8 +264,11 @@ class Sound {
                     // チャンネルを有効化
                     square1State.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
-                    square1State.envelopeVolume = (soundRegs[0x02].toInt() shr 4) and 0x0F
-                    square1State.envelopeCounter = 0
+                    val nr12 = soundRegs[0x02]
+                    square1State.envelopeVolume = (nr12.toInt() shr 4) and 0x0F
+                    // エンベロープカウンタをピリオド値で初期化（実機仕様）
+                    val envelopePeriod = nr12.toInt() and 0x07
+                    square1State.envelopeCounter = if (envelopePeriod == 0) 8 else envelopePeriod
                     // 長さカウンタの初期化（Length Enableが有効な場合）
                     if ((value.toInt() and 0x40) != 0) {
                         square1State.lengthEnabled = true
@@ -313,8 +316,11 @@ class Sound {
 
                     square2State.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
-                    square2State.envelopeVolume = (soundRegs[0x06].toInt() shr 4) and 0x0F
-                    square2State.envelopeCounter = 0
+                    val nr22 = soundRegs[0x06]
+                    square2State.envelopeVolume = (nr22.toInt() shr 4) and 0x0F
+                    // エンベロープカウンタをピリオド値で初期化（実機仕様）
+                    val envelopePeriod = nr22.toInt() and 0x07
+                    square2State.envelopeCounter = if (envelopePeriod == 0) 8 else envelopePeriod
                     // 長さカウンタの初期化（Length Enableが有効な場合）
                     if ((value.toInt() and 0x40) != 0) {
                         square2State.lengthEnabled = true
@@ -419,8 +425,11 @@ class Sound {
 
                     noiseState.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
-                    noiseState.envelopeVolume = (soundRegs[0x12].toInt() shr 4) and 0x0F
-                    noiseState.envelopeCounter = 0
+                    val nr42 = soundRegs[0x12]
+                    noiseState.envelopeVolume = (nr42.toInt() shr 4) and 0x0F
+                    // エンベロープカウンタをピリオド値で初期化（実機仕様）
+                    val envelopePeriod = nr42.toInt() and 0x07
+                    noiseState.envelopeCounter = if (envelopePeriod == 0) 8 else envelopePeriod
                     // LFSRの初期化（Trigger時にリセット）
                     noiseState.lfsr = 0x7FFF
                     noiseState.lfsrCounter = 0
@@ -491,62 +500,41 @@ class Sound {
     }
 
     /**
-     * 長さカウンタのみを更新（エンベロープとスイープはgenerateSamples()で更新）
+     * 長さカウンタを更新（フレームシーケンサの256Hzステップで呼ばれる）
+     *
+     * 実機仕様: 256Hzで各チャンネルのLength Counterを1ずつデクリメント
+     * 累積器は不要で、単純にカウンタを減らすだけ
      */
-    private fun updateLengthCounters(soundCycles: Int) {
+    private fun updateLengthCounters() {
         // Square 1の長さカウンタ
         if (square1State.lengthEnabled && square1State.lengthCounter > 0) {
-            square1State.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (square1State.lengthCounterAccumulator >= lengthStep && square1State.lengthCounter > 0) {
-                square1State.lengthCounterAccumulator -= lengthStep
-                square1State.lengthCounter--
-                if (square1State.lengthCounter <= 0) {
-                    square1State.enabled = false
-                    break
-                }
+            square1State.lengthCounter--
+            if (square1State.lengthCounter <= 0) {
+                square1State.enabled = false
             }
         }
 
         // Square 2の長さカウンタ
         if (square2State.lengthEnabled && square2State.lengthCounter > 0) {
-            square2State.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (square2State.lengthCounterAccumulator >= lengthStep && square2State.lengthCounter > 0) {
-                square2State.lengthCounterAccumulator -= lengthStep
-                square2State.lengthCounter--
-                if (square2State.lengthCounter <= 0) {
-                    square2State.enabled = false
-                    break
-                }
+            square2State.lengthCounter--
+            if (square2State.lengthCounter <= 0) {
+                square2State.enabled = false
             }
         }
 
         // Waveの長さカウンタ
         if (waveState.lengthEnabled && waveState.lengthCounter > 0) {
-            waveState.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (waveState.lengthCounterAccumulator >= lengthStep && waveState.lengthCounter > 0) {
-                waveState.lengthCounterAccumulator -= lengthStep
-                waveState.lengthCounter--
-                if (waveState.lengthCounter <= 0) {
-                    waveState.enabled = false
-                    break
-                }
+            waveState.lengthCounter--
+            if (waveState.lengthCounter <= 0) {
+                waveState.enabled = false
             }
         }
 
         // Noiseの長さカウンタ
         if (noiseState.lengthEnabled && noiseState.lengthCounter > 0) {
-            noiseState.lengthCounterAccumulator += soundCycles
-            val lengthStep = 2048
-            while (noiseState.lengthCounterAccumulator >= lengthStep && noiseState.lengthCounter > 0) {
-                noiseState.lengthCounterAccumulator -= lengthStep
-                noiseState.lengthCounter--
-                if (noiseState.lengthCounter <= 0) {
-                    noiseState.enabled = false
-                    break
-                }
+            noiseState.lengthCounter--
+            if (noiseState.lengthCounter <= 0) {
+                noiseState.enabled = false
             }
         }
     }
@@ -911,57 +899,76 @@ class Sound {
      * Square 1チャンネルの状態を更新（エンベロープのみ）
      * 長さカウンタはupdateLengthCounters()で更新される
      */
-    private fun updateSquare1Channel(soundCycles: Int) {
-        val nr12 = soundRegs[0x02]
-
-        // エンベロープの更新（64Hz = 524288 / 64 = 8192サウンドサイクルごと）
-        // 実機では、エンベロープのperiodが0の場合、エンベロープは無効になり、初期ボリュームがそのまま使われる
-        val envelopePeriod = nr12.toInt() and 0x07
-        if (envelopePeriod > 0 && square1State.enabled) {
-            square1State.envelopeCounter += soundCycles
-            // period は「何回の 64Hz クロックで 1 ステップ進むか」を表す
-            val envelopeStep = 8192 * envelopePeriod
-            while (square1State.envelopeCounter >= envelopeStep) {
-                square1State.envelopeCounter -= envelopeStep
-                val direction = if ((nr12.toInt() and 0x08) != 0) 1 else -1
-                square1State.envelopeVolume += direction
-                square1State.envelopeVolume = square1State.envelopeVolume.coerceIn(0, 15)
-                // 実機では、エンベロープのボリュームが0または15に達しても、エンベロープの更新は停止するが、チャンネルは有効のまま
-                if (square1State.envelopeVolume == 0 || square1State.envelopeVolume == 15) {
-                    // エンベロープが最大/最小に達したら停止
-                    break
-                }
-            }
+    /**
+     * Square 1チャンネルのエンベロープを更新（フレームシーケンサの64Hzステップで呼ばれる）
+     *
+     * 実機仕様: 64Hzで呼ばれ、envelopeCounterをデクリメント
+     * カウンタが0になったらボリュームを更新
+     */
+    private fun updateSquare1Envelope() {
+        if (!square1State.enabled) {
+            return
         }
-        // envelopePeriodが0の場合、エンベロープは無効で、初期ボリュームがそのまま使われる（既に設定されている）
+
+        val nr12 = soundRegs[0x02]
+        val envelopePeriod = nr12.toInt() and 0x07
+
+        // periodが0の場合、エンベロープは無効
+        if (envelopePeriod == 0) {
+            return
+        }
+
+        // カウンタをデクリメント
+        square1State.envelopeCounter--
+        if (square1State.envelopeCounter > 0) {
+            return
+        }
+
+        // カウンタが0になったらボリュームを更新してリロード
+        square1State.envelopeCounter = envelopePeriod
+
+        val direction = if ((nr12.toInt() and 0x08) != 0) 1 else -1
+        val newVolume = square1State.envelopeVolume + direction
+
+        // ボリュームは0-15の範囲
+        if (newVolume < 0 || newVolume > 15) {
+            // 範囲外の場合、更新を停止
+            return
+        }
+
+        square1State.envelopeVolume = newVolume
     }
 
     /**
-     * Square 2チャンネルの状態を更新（エンベロープのみ）
-     * 長さカウンタはupdateLengthCounters()で更新される
+     * Square 2チャンネルのエンベロープを更新（フレームシーケンサの64Hzステップで呼ばれる）
      */
-    private fun updateSquare2Channel(soundCycles: Int) {
-        val nr22 = soundRegs[0x06]
-
-        // エンベロープの更新（64Hz = 8192サウンドサイクルごと）
-        // 実機では、エンベロープのperiodが0の場合、エンベロープは無効になり、初期ボリュームがそのまま使われる
-        val envelopePeriod = nr22.toInt() and 0x07
-        if (envelopePeriod > 0 && square2State.enabled) {
-            square2State.envelopeCounter += soundCycles
-            // period は「何回の 64Hz クロックで 1 ステップ進むか」を表す
-            val envelopeStep = 8192 * envelopePeriod
-            while (square2State.envelopeCounter >= envelopeStep) {
-                square2State.envelopeCounter -= envelopeStep
-                val direction = if ((nr22.toInt() and 0x08) != 0) 1 else -1
-                square2State.envelopeVolume += direction
-                square2State.envelopeVolume = square2State.envelopeVolume.coerceIn(0, 15)
-                // 実機では、エンベロープのボリュームが0または15に達しても、エンベロープの更新は停止するが、チャンネルは有効のまま
-                if (square2State.envelopeVolume == 0 || square2State.envelopeVolume == 15) {
-                    break
-                }
-            }
+    private fun updateSquare2Envelope() {
+        if (!square2State.enabled) {
+            return
         }
-        // envelopePeriodが0の場合、エンベロープは無効で、初期ボリュームがそのまま使われる（既に設定されている）
+
+        val nr22 = soundRegs[0x06]
+        val envelopePeriod = nr22.toInt() and 0x07
+
+        if (envelopePeriod == 0) {
+            return
+        }
+
+        square2State.envelopeCounter--
+        if (square2State.envelopeCounter > 0) {
+            return
+        }
+
+        square2State.envelopeCounter = envelopePeriod
+
+        val direction = if ((nr22.toInt() and 0x08) != 0) 1 else -1
+        val newVolume = square2State.envelopeVolume + direction
+
+        if (newVolume < 0 || newVolume > 15) {
+            return
+        }
+
+        square2State.envelopeVolume = newVolume
     }
 
     /**
@@ -976,28 +983,35 @@ class Sound {
     }
 
     /**
-     * Noiseチャンネルの状態を更新（エンベロープとLFSRのみ）
-     * 長さカウンタはupdateLengthCounters()で更新される
+     * Noiseチャンネルのエンベロープを更新（フレームシーケンサの64Hzステップで呼ばれる）
      */
-    private fun updateNoiseChannel(soundCycles: Int) {
-        val nr42 = soundRegs[0x11]
-
-        // エンベロープの更新（64Hz = 8192サウンドサイクルごと）
-        val envelopePeriod = nr42.toInt() and 0x07
-        if (envelopePeriod > 0 && noiseState.enabled) {
-            noiseState.envelopeCounter += soundCycles
-            // period は「何回の 64Hz クロックで 1 ステップ進むか」を表す
-            val envelopeStep = 8192 * envelopePeriod
-            while (noiseState.envelopeCounter >= envelopeStep) {
-                noiseState.envelopeCounter -= envelopeStep
-                val direction = if ((nr42.toInt() and 0x08) != 0) 1 else -1
-                noiseState.envelopeVolume += direction
-                noiseState.envelopeVolume = noiseState.envelopeVolume.coerceIn(0, 15)
-                if (noiseState.envelopeVolume == 0 || noiseState.envelopeVolume == 15) {
-                    break
-                }
-            }
+    private fun updateNoiseEnvelope() {
+        if (!noiseState.enabled) {
+            return
         }
+
+        val nr42 = soundRegs[0x11]
+        val envelopePeriod = nr42.toInt() and 0x07
+
+        if (envelopePeriod == 0) {
+            return
+        }
+
+        noiseState.envelopeCounter--
+        if (noiseState.envelopeCounter > 0) {
+            return
+        }
+
+        noiseState.envelopeCounter = envelopePeriod
+
+        val direction = if ((nr42.toInt() and 0x08) != 0) 1 else -1
+        val newVolume = noiseState.envelopeVolume + direction
+
+        if (newVolume < 0 || newVolume > 15) {
+            return
+        }
+
+        noiseState.envelopeVolume = newVolume
     }
 
     /**
@@ -1017,22 +1031,22 @@ class Sound {
         when (frameSequencerStep) {
             0, 2, 4, 6 -> {
                 // 256Hz: Lengthカウンタ（全チャンネル）
-                updateLengthCounters(2048)
+                updateLengthCounters()
             }
         }
 
         when (frameSequencerStep) {
             2, 6 -> {
                 // 128Hz: Square1 スイープ
-                updateSweep(4096)
+                updateSweep()
             }
         }
 
         if (frameSequencerStep == 7) {
             // 64Hz: エンベロープ（Square1/2/Noise）
-            updateSquare1Channel(8192)
-            updateSquare2Channel(8192)
-            updateNoiseChannel(8192)
+            updateSquare1Envelope()
+            updateSquare2Envelope()
+            updateNoiseEnvelope()
         }
     }
 
@@ -1215,74 +1229,67 @@ class Sound {
     /**
      * Square 1のスイープ処理を更新
      */
-    private fun updateSweep(soundCycles: Int) {
+    /**
+     * Sweepを更新（フレームシーケンサの128Hzステップで呼ばれる）
+     *
+     * 実機仕様: 128Hzで呼ばれ、sweepCounterをデクリメント
+     * sweepCounterが0になったら周波数を更新
+     */
+    private fun updateSweep() {
         // スイープが無効な場合、またはチャンネルが無効な場合は何もしない
-        if (!square1State.enabled) {
+        if (!square1State.enabled || !sweepEnabled) {
             return
         }
 
-        // スイープが無効な場合（sweepPeriod == 0 かつ sweepShift == 0 の場合）
-        // ただし、sweepNegateが有効な場合はスイープが有効になる可能性がある
         val nr10 = soundRegs[0x00]
         val currentSweepPeriod = ((nr10.toInt() shr 4) and 0x07)
         val currentSweepShift = nr10.toInt() and 0x07
 
-        // スイープが無効な場合（period == 0 かつ shift == 0）
-        if (currentSweepPeriod == 0 && currentSweepShift == 0) {
-            // スイープが無効な場合でも、shadowFrequencyはレジスタから読み取る
-            // ただし、スイープ処理は実行しない
-            val nr13 = soundRegs[0x03]
-            val nr14 = soundRegs[0x04]
-            val regFrequency = ((nr14.toInt() and 0x07) shl 8) or nr13.toInt()
-            if (regFrequency != shadowFrequency) {
-                shadowFrequency = regFrequency
-            }
+        // スイープが無効な場合（period == 0）
+        if (currentSweepPeriod == 0) {
             return
         }
 
         // スイープが有効な場合のみ処理
         if (!sweepInitialized) {
             sweepInitialized = true
-            sweepCounter = 0
-            // 最初の更新を1サウンドサイクル遅延させる（実機の仕様）
+            sweepCounter = currentSweepPeriod
             return
         }
 
-        sweepCounter += soundCycles
-        // 128Hz = 524288 / 128 = 4096サウンドサイクルごと
-        // period は「何回の 128Hz クロックで 1 ステップ進むか」を表す
-        // period=0 は 8 として扱う
-        val effectivePeriod = if (currentSweepPeriod == 0) 8 else currentSweepPeriod
-        val sweepStep = 4096 * effectivePeriod
-        while (sweepCounter >= sweepStep) {
-            sweepCounter -= sweepStep
-
-            // 周波数を更新
-            // 実機の仕様: change = shadowFrequency >> sweepShift
-            // changeが0の場合、スイープは停止する（実機の仕様）
-            val change = shadowFrequency shr currentSweepShift
-            if (change == 0) {
-                // changeが0の場合、スイープは停止する（実機の仕様）
-                break
-            }
-
-            val newFrequency =
-                if ((nr10.toInt() and 0x08) != 0) {
-                    shadowFrequency - change
-                } else {
-                    shadowFrequency + change
-                }
-
-            if (newFrequency < 0 || newFrequency > 2047) {
-                square1State.enabled = false
-                sweepEnabled = false
-                break
-            } else {
-                shadowFrequency = newFrequency
-                // 周波数レジスタを更新
-                soundRegs[0x03] = (newFrequency and 0xFF).toUByte()
-                soundRegs[0x04] = ((soundRegs[0x04].toInt() and 0xF8) or (newFrequency shr 8)).toUByte()
-            }
+        // カウンタをデクリメント
+        sweepCounter--
+        if (sweepCounter > 0) {
+            return
         }
+
+        // カウンタが0になったら周波数を更新してリロード
+        sweepCounter = currentSweepPeriod
+
+        // 周波数を更新
+        // 実機の仕様: change = shadowFrequency >> sweepShift
+        val change = shadowFrequency shr currentSweepShift
+        if (change == 0) {
+            // changeが0の場合、何もしない
+            return
+        }
+
+        val newFrequency =
+            if ((nr10.toInt() and 0x08) != 0) {
+                shadowFrequency - change
+            } else {
+                shadowFrequency + change
+            }
+
+        if (newFrequency < 0 || newFrequency > 2047) {
+            square1State.enabled = false
+            sweepEnabled = false
+            return
+        }
+
+        shadowFrequency = newFrequency
+        // 周波数レジスタを更新
+        soundRegs[0x03] = (newFrequency and 0xFF).toUByte()
+        soundRegs[0x04] = ((soundRegs[0x04].toInt() and 0xF8) or (newFrequency shr 8)).toUByte()
     }
 }
