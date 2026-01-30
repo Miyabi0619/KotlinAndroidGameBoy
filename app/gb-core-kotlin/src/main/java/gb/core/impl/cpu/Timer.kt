@@ -27,7 +27,15 @@ class Timer(
         private set
 
     // DIV 用の内部カウンタ（CPU サイクル数）
+    // 実機ではDIVは内部16bitカウンタの上位8bitを表示
+    // このカウンタは常にインクリメントされ、256サイクルごとにDIVが1増える
     private var divCounter: Int = 0
+
+    /**
+     * DIVの内部16bitカウンタを取得（APUのフレームシーケンサとの同期用）
+     * 実機では、このカウンタのbit 12がフレームシーケンサのクロックソース
+     */
+    fun getDivInternalCounter(): Int = divCounter
 
     // TIMA 用の内部カウンタ（CPU サイクル数）
     private var timaCounter: Int = 0

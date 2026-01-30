@@ -111,6 +111,11 @@ class Cpu(
     private var stopped: Boolean = false
 
     /**
+     * HALTバグが発生している状態（次の命令がダブルフェッチされる）
+     */
+    private var haltBugActive: Boolean = false
+
+    /**
      * 現在の PC が指す 1 命令を実行し、その命令に要したサイクル数を返す。
      */
     fun executeInstruction(): Int {
@@ -128,22 +133,33 @@ class Cpu(
         }
 
         val pcBefore = registers.pc
-        val opcode = bus.readByte(pcBefore).toInt()
+
+        // HALTバグが発生している場合、PCを進めずに同じ命令を読み取る
+        val opcode =
+            if (haltBugActive) {
+                haltBugActive = false // バグは1回だけ発生
+                bus.readByte(pcBefore).toInt()
+            } else {
+                bus.readByte(pcBefore).toInt()
+            }
 
         // HALT命令（0x76）の場合は、HALTバグのチェックが必要
-        // HALTバグ: IMEが無効で割り込みがペンディングしている場合、PCが1進んでしまう
+        // HALTバグ: IME=0 かつ (IE & IF) != 0 の場合、HALTは実行されずにPCが進まない
         if (opcode == 0x76 && !interruptMasterEnabled) {
             val ifReg = bus.readByte(0xFF0Fu.toUShort())
-            if (ifReg != 0u.toUByte()) {
-                // HALTバグ: PCを1進める（実機のバグを再現）
-                registers.pc = (pcBefore.toInt() + 1).toUShort()
+            val ieReg = bus.readByte(0xFFFFu.toUShort())
+            if ((ifReg.toInt() and ieReg.toInt()) != 0) {
+                // HALTバグ: PCを進めない、次の命令がダブルフェッチされる
+                haltBugActive = true
                 // HALT状態には入らない
                 return Cycles.NOP
             }
         }
 
-        // 次の命令に備えて PC を 1 バイト分進める。
-        registers.pc = (pcBefore.toInt() + 1).toUShort()
+        // 次の命令に備えて PC を 1 バイト分進める（HALTバグの場合は進めない）
+        if (!haltBugActive) {
+            registers.pc = (pcBefore.toInt() + 1).toUShort()
+        }
 
         return try {
             executeByOpcode(opcode, pcBefore)

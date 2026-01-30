@@ -78,10 +78,11 @@ class Sound {
     private var frameStartSoundCycle: Double = 0.0 // フレーム開始時点のサウンドサイクル
     private val maxSoundCycle = 1e9 // 正規化用の最大値（約19時間分）
 
-    // フレームシーケンサ（512Hz = SOUND_FREQUENCY / 512）
+    // フレームシーケンサ（512Hz = SOUND_FREQUENCY / 1024 = 8192 Hz / 16）
     // 8ステップ（0-7）で Length / Sweep / Envelope を更新する
-    private var frameSequencerCounter: Double = 0.0 // サウンドサイクル単位
+    // 実機ではDIVレジスタのbit 12（またはbit 5から見たbit 4）の立ち下がりエッジで更新
     private var frameSequencerStep: Int = 0
+    private var lastDivBit12: Boolean = false // DIVのbit 12の前回の状態（エッジ検出用）
 
     // チャンネルの内部状態
     private val square1State = SquareChannelState()
@@ -253,6 +254,13 @@ class Sound {
 
             0x04 -> { // NR14 (Square 1 Frequency High & Trigger)
                 if ((value.toInt() and 0x80) != 0) {
+                    // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
+                    val nr52 = soundRegs[0x16]
+                    val soundEnabled = (nr52.toInt() and 0x80) != 0
+                    if (!soundEnabled) {
+                        return // サウンドが無効な場合、トリガーを無視
+                    }
+
                     // チャンネルを有効化
                     square1State.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
@@ -296,6 +304,13 @@ class Sound {
 
             0x08 -> { // NR24 (Square 2 Frequency High & Trigger)
                 if ((value.toInt() and 0x80) != 0) {
+                    // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
+                    val nr52 = soundRegs[0x16]
+                    val soundEnabled = (nr52.toInt() and 0x80) != 0
+                    if (!soundEnabled) {
+                        return // サウンドが無効な場合、トリガーを無視
+                    }
+
                     square2State.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
                     square2State.envelopeVolume = (soundRegs[0x06].toInt() shr 4) and 0x0F
@@ -349,6 +364,13 @@ class Sound {
 
             0x0E -> { // NR34 (Wave Frequency High & Trigger)
                 if ((value.toInt() and 0x80) != 0) {
+                    // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
+                    val nr52 = soundRegs[0x16]
+                    val soundEnabled = (nr52.toInt() and 0x80) != 0
+                    if (!soundEnabled) {
+                        return // サウンドが無効な場合、トリガーを無視
+                    }
+
                     // NR30のWave Enableをチェック
                     val nr30 = soundRegs[0x0A]
                     val waveEnabled = (nr30.toInt() and 0x80) != 0
@@ -388,6 +410,13 @@ class Sound {
 
             0x14 -> { // NR44 (Noise Trigger)
                 if ((value.toInt() and 0x80) != 0) {
+                    // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
+                    val nr52 = soundRegs[0x16]
+                    val soundEnabled = (nr52.toInt() and 0x80) != 0
+                    if (!soundEnabled) {
+                        return // サウンドが無効な場合、トリガーを無視
+                    }
+
                     noiseState.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
                     noiseState.envelopeVolume = (soundRegs[0x12].toInt() shr 4) and 0x0F
@@ -430,7 +459,10 @@ class Sound {
      *
      * @param cycles 処理するCPUサイクル数
      */
-    fun step(cycles: Int) {
+    fun step(
+        cycles: Int,
+        divInternalCounter: Int,
+    ) {
         // サウンド処理はCPU周波数の1/8で動作
         // soundCycleCounterはサウンドサイクル単位で管理（浮動小数点で精度を保持）
         // より正確なタイミング同期のため、浮動小数点で累積
@@ -445,8 +477,14 @@ class Sound {
             frameStartSoundCycle = 0.0
         }
 
-        // フレームシーケンサ（512Hz）を進める
-        advanceFrameSequencer(soundCyclesDouble)
+        // フレームシーケンサ（512Hz）をDIVレジスタのbit 12の立ち下がりエッジで進める
+        // 実機仕様: DIVレジスタの内部16bitカウンタのbit 12が1→0になるタイミングで更新
+        val currentDivBit12 = (divInternalCounter and 0x1000) != 0
+        if (lastDivBit12 && !currentDivBit12) {
+            // 立ち下がりエッジ検出
+            advanceFrameSequencerStep()
+        }
+        lastDivBit12 = currentDivBit12
 
         // Noise の LFSR は周波数に従って常時更新する（フレームシーケンサとは独立）
         advanceNoiseLfsr(soundCyclesDouble)
@@ -531,22 +569,13 @@ class Sound {
         // 1フレーム = 70224 CPUサイクル = 70224 / 8 = 8778 サウンドサイクル
         val cyclesPerFrame = 70224 / 8.0
 
-        // 最初のフレームでは、現在のカウンタから1フレーム分を引く
-        // より正確なタイミング計算のため、フレーム開始時点を正確に記録
-        val currentFrameStart =
-            if (frameStartSoundCycle == 0.0) {
-                // 最初のフレームでは、現在のカウンタから1フレーム分を引く
-                soundCycleCounter - cyclesPerFrame
-            } else {
-                // 前回のフレーム開始時点を使用（タイミング同期のため）
-                frameStartSoundCycle
-            }
+        // 現在のフレームの開始時点を記録
+        // 最初のフレームでは0から開始、以降は前回のフレーム終了時点を使用
+        val currentFrameStart = frameStartSoundCycle
 
-        // 次のフレームの開始時点を更新（現在のカウンタ位置）
-        // 実際のフレームサイクル数に基づいて更新（より正確に）
-        // 1フレーム = 70224 CPUサイクル = 70224 / 8 = 8778 サウンドサイクル
-        // 正確なフレームサイクル数を使用（タイミング同期のため）
-        frameStartSoundCycle = soundCycleCounter
+        // 次のフレームの開始時点を更新（現在のフレーム開始時点 + 1フレーム分）
+        // これにより、サンプル生成のタイミングが正確に保たれる
+        frameStartSoundCycle = currentFrameStart + cyclesPerFrame
 
         // 各サンプルごとに生成
         // 1サンプルあたりのサウンドサイクル数
@@ -575,14 +604,15 @@ class Sound {
 
         // チャンネル出力マスクを事前に計算
         // 実機の仕様に基づく正しいビットマスク
-        val square1Left = (nr51Int and 0x10) != 0 // Bit 4
-        val square1Right = (nr51Int and 0x01) != 0 // Bit 0
-        val square2Left = (nr51Int and 0x20) != 0 // Bit 5
-        val square2Right = (nr51Int and 0x02) != 0 // Bit 1
-        val waveLeft = (nr51Int and 0x40) != 0 // Bit 6
-        val waveRight = (nr51Int and 0x04) != 0 // Bit 2
-        val noiseLeft = (nr51Int and 0x80) != 0 // Bit 7
-        val noiseRight = (nr51Int and 0x08) != 0 // Bit 3
+        // NR51: Bit 7-4 = SO2(右チャンネル), Bit 3-0 = SO1(左チャンネル)
+        val square1Right = (nr51Int and 0x10) != 0 // Bit 4: Square1 -> SO2(右)
+        val square1Left = (nr51Int and 0x01) != 0 // Bit 0: Square1 -> SO1(左)
+        val square2Right = (nr51Int and 0x20) != 0 // Bit 5: Square2 -> SO2(右)
+        val square2Left = (nr51Int and 0x02) != 0 // Bit 1: Square2 -> SO1(左)
+        val waveRight = (nr51Int and 0x40) != 0 // Bit 6: Wave -> SO2(右)
+        val waveLeft = (nr51Int and 0x04) != 0 // Bit 2: Wave -> SO1(左)
+        val noiseRight = (nr51Int and 0x80) != 0 // Bit 7: Noise -> SO2(右)
+        val noiseLeft = (nr51Int and 0x08) != 0 // Bit 3: Noise -> SO1(左)
 
         // 各チャンネルからサンプルを生成してミキシング
         // 最適化: ループ内の計算を削減、条件分岐を最適化
@@ -629,12 +659,15 @@ class Sound {
                 if (noiseRight) rightMixed += noiseSample
             }
 
-            // ボリュームを適用（より正確な計算）
-            // 実機では、各チャンネルの出力をボリュームでスケールしてからミキシング
-            // ボリュームは1-8の範囲で、出力は (sample * volume) / 8 で計算される
-            // オーバーフローを防ぐため、Long型で計算してからクリップ
-            leftMixed = (leftMixed * leftVolume) / 8
-            rightMixed = (rightMixed * rightVolume) / 8
+            // マスターボリュームを適用
+            // NR50のボリューム（0-7）: 0=ミュート、7=最大
+            // 実機の仕様: ボリュームは出力アンプのゲインを表す
+            // ボリューム0 = ミュート、ボリューム7 = 最大
+            // 各チャンネルは既に適切にスケールされているため、
+            // マスターボリュームは (volume + 1) / 8 の係数で適用
+            // オーバーフロー対策: 既に各チャンネルで1/4スケール済みと仮定
+            leftMixed = (leftMixed * (leftVolume + 1)) / 8
+            rightMixed = (rightMixed * (rightVolume + 1)) / 8
 
             // Vin入力は実機では通常使用されないため、処理をスキップ（最適化）
 
@@ -697,9 +730,11 @@ class Sound {
 
         // 周期を計算（サウンドサイクル単位）
         // Game BoyのSquareチャンネルは、周波数 = (131072 / (2048 - frequency)) Hz
-        // サウンド周波数はCPU周波数の1/8なので、周期 = (2048 - frequency) * 8 サウンドサイクル
+        // 周期 = (2048 - frequency) / 131072 秒
+        // CPUサイクル = (2048 - frequency) * 32 CPUサイクル
+        // サウンドサイクル = (2048 - frequency) * 32 / 8 = (2048 - frequency) * 4 サウンドサイクル
         // より正確な計算のため、浮動小数点を使用
-        val period = (2048.0 - frequency) * 8.0
+        val period = (2048.0 - frequency) * 4.0
         if (period <= 0) {
             return 0
         }
@@ -711,16 +746,16 @@ class Sound {
                 0 -> 0b00000001
 
                 // 12.5% (1/8) - bit 0のみ
-                1 -> 0b00000011
+                1 -> 0b10000001
 
-                // 25% (2/8) - bit 0-1
-                2 -> 0b00001111
+                // 25% (2/8) - bit 0, 7
+                2 -> 0b10000111
 
-                // 50% (4/8) - bit 0-3
-                3 -> 0b11111100
+                // 50% (4/8) - bit 0-2, 7
+                3 -> 0b01111110
 
-                // 75% (6/8) - bit 2-7（実機の仕様）
-                else -> 0b00001111
+                // 75% (6/8) - bit 1-6（実機の仕様）
+                else -> 0b00000001
             }
 
         // エンベロープボリュームを使用
@@ -732,26 +767,25 @@ class Sound {
         }
 
         // 波形を生成（矩形波）
-        // 周期内の位置を0-7の範囲に正規化（より正確な計算）
-        // 浮動小数点で計算してから整数に変換することで、精度を向上
-        // periodはDouble型なので、浮動小数点の剰余演算を使用
-        // 精度向上のため、periodが0でないことを確認
+        // 周期内の位置を0-7の範囲に正規化
+        // ノイズを防ぐため、整数演算ベースで計算
         val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
         // デューティ比の位置を計算（0-7の範囲）
-        // より正確な計算のため、浮動小数点を使用
-        // 実機では、デューティ比の位置は0-7の整数値で管理される
-        // 精度向上のため、切り捨てを使用（実機の動作に合わせる）
-        val dutyPositionDouble = if (period > 0) (positionInPeriod * 8.0 / period) else 0.0
-        val dutyPosition = dutyPositionDouble.toInt().coerceIn(0, 7)
+        // 精度を保つため、8を掛けてから周期で割る
+        val dutyPosition = if (period > 0) {
+            ((positionInPeriod * 8.0 / period).toInt() and 0x07)
+        } else {
+            0
+        }
         // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
         // 実機では、dutyPositionは0-7の範囲で、dutyPatternの対応するビットをチェック
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
 
         // ボリュームを適用（0-15を0-32767にスケール）
         // 実機では、ボリュームは0-15で、出力は waveValue * volume で計算される
-        // 16bit範囲にスケールするため、2184.5を掛ける（15 * 2184.5 ≈ 32767.5）
-        // より正確なスケーリングのため、浮動小数点で計算
-        return (waveValue * volume * 2184.5).toInt().coerceIn(-32768, 32767)
+        // 16bit範囲にスケールするため、整数演算で計算（丸め誤差を防ぐ）
+        // スケール係数: 32767 / 15 / 4 = 546（4チャンネルミキシングのヘッドルーム確保）
+        return (waveValue * volume * 546).coerceIn(-32768, 32767)
     }
 
     /**
@@ -775,9 +809,11 @@ class Sound {
             return 0
         }
 
-        // 周期を計算
+        // 周期を計算（サウンドサイクル単位）
+        // Game BoyのSquareチャンネルは、周波数 = (131072 / (2048 - frequency)) Hz
+        // 周期 = (2048 - frequency) * 32 CPUサイクル = (2048 - frequency) * 4 サウンドサイクル
         // より正確な計算のため、浮動小数点を使用
-        val period = (2048.0 - frequency) * 8.0
+        val period = (2048.0 - frequency) * 4.0
         if (period <= 0) {
             return 0
         }
@@ -789,16 +825,16 @@ class Sound {
                 0 -> 0b00000001
 
                 // 12.5% (1/8)
-                1 -> 0b00000011
+                1 -> 0b10000001
 
                 // 25% (2/8)
-                2 -> 0b00001111
+                2 -> 0b10000111
 
                 // 50% (4/8)
-                3 -> 0b11111100
+                3 -> 0b01111110
 
-                // 75% (6/8) - bit 2-7（実機の仕様）
-                else -> 0b00001111
+                // 75% (6/8) - bit 1-6（実機の仕様）
+                else -> 0b00000001
             }
 
         // エンベロープボリュームを使用
@@ -810,20 +846,22 @@ class Sound {
         }
 
         // 波形を生成
-        // 浮動小数点で計算してから整数に変換することで、精度を向上
-        // periodはDouble型なので、浮動小数点の剰余演算を使用
-        // 精度向上のため、periodが0でないことを確認
+        // 周期内の位置を計算
         val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
         // デューティ比の位置を計算（0-7の範囲）
-        // 精度向上のため、切り捨てを使用（実機の動作に合わせる）
-        val dutyPositionDouble = if (period > 0) (positionInPeriod * 8.0 / period) else 0.0
-        val dutyPosition = dutyPositionDouble.toInt().coerceIn(0, 7)
+        // ノイズを防ぐため、ビットマスクで範囲を制限
+        val dutyPosition = if (period > 0) {
+            ((positionInPeriod * 8.0 / period).toInt() and 0x07)
+        } else {
+            0
+        }
         // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
 
         // ボリュームを適用（0-15を0-32767にスケール）
-        // より正確なスケーリングのため、浮動小数点で計算
-        return (waveValue * volume * 2184.5).toInt().coerceIn(-32768, 32767)
+        // 整数演算で計算（丸め誤差を防ぐ）
+        // スケール係数: 32767 / 15 / 4 = 546（4チャンネルミキシングのヘッドルーム確保）
+        return (waveValue * volume * 546).coerceIn(-32768, 32767)
     }
 
     /**
@@ -970,36 +1008,31 @@ class Sound {
      * - ステップ 2,6: 128Hz Sweep（Square1）
      * - ステップ 7: 64Hz Envelope（Square1/2/Noise）
      */
-    private fun advanceFrameSequencer(soundCyclesDouble: Double) {
-        // 1ステップあたりのサウンドサイクル数（SOUND_FREQUENCY / 512Hz）
-        val stepCycles = SOUND_FREQUENCY / 512.0 // 1024.0 サウンドサイクル
+    /**
+     * フレームシーケンサを1ステップ進める（DIVのbit 12立ち下がりエッジで呼ばれる）
+     */
+    private fun advanceFrameSequencerStep() {
+        frameSequencerStep = (frameSequencerStep + 1) and 0x07
 
-        frameSequencerCounter += soundCyclesDouble
-
-        while (frameSequencerCounter >= stepCycles) {
-            frameSequencerCounter -= stepCycles
-            frameSequencerStep = (frameSequencerStep + 1) and 0x07
-
-            when (frameSequencerStep) {
-                0, 2, 4, 6 -> {
-                    // 256Hz: Lengthカウンタ（全チャンネル）
-                    updateLengthCounters(2048)
-                }
+        when (frameSequencerStep) {
+            0, 2, 4, 6 -> {
+                // 256Hz: Lengthカウンタ（全チャンネル）
+                updateLengthCounters(2048)
             }
+        }
 
-            when (frameSequencerStep) {
-                2, 6 -> {
-                    // 128Hz: Square1 スイープ
-                    updateSweep(4096)
-                }
+        when (frameSequencerStep) {
+            2, 6 -> {
+                // 128Hz: Square1 スイープ
+                updateSweep(4096)
             }
+        }
 
-            if (frameSequencerStep == 7) {
-                // 64Hz: エンベロープ（Square1/2/Noise）
-                updateSquare1Channel(8192)
-                updateSquare2Channel(8192)
-                updateNoiseChannel(8192)
-            }
+        if (frameSequencerStep == 7) {
+            // 64Hz: エンベロープ（Square1/2/Noise）
+            updateSquare1Channel(8192)
+            updateSquare2Channel(8192)
+            updateNoiseChannel(8192)
         }
     }
 
@@ -1079,27 +1112,27 @@ class Sound {
         }
 
         // 周期を計算
-        // 仕様書: 周波数 = 4,194,304 / (64 * (2048 - x)) Hz = 65536 / (2048 - x) Hz
-        // Squareチャンネル（131072 / (2048 - x) Hz）の半分の周波数
-        // サウンド周波数はCPU周波数の1/8なので、周期 = (2048 - frequency) * 16.0 サウンドサイクル
-        // （Squareチャンネルの2倍の周期）
+        // 仕様書: 周波数 = 65536 / (2048 - x) Hz（Squareチャンネルの半分）
+        // 周期 = (2048 - frequency) / 65536 秒
+        // CPUサイクル = (2048 - frequency) * 64 CPUサイクル
+        // サウンドサイクル = (2048 - frequency) * 64 / 8 = (2048 - frequency) * 8 サウンドサイクル
+        // ※Squareチャンネルは (2048 - frequency) * 4 なので、Waveはその2倍
         // より正確な計算のため、浮動小数点を使用
-        val period = (2048.0 - frequency) * 16.0
+        val period = (2048.0 - frequency) * 8.0
         if (period <= 0) {
             return 0
         }
 
         // 波形位置を計算（32サンプルの波形）
-        // より正確な計算のため、浮動小数点を使用
-        // 実機では、波形位置は連続的に更新される
-        // 周期内の位置を計算（0.0 ～ period の範囲）
-        // 精度向上のため、periodが0でないことを確認
+        // 周期内の位置を計算
         val position = if (period > 0) (soundCycle % period) else 0.0
         // 32サンプルの波形なので、位置を0-31の範囲に正規化
-        // より正確な計算のため、浮動小数点で計算してから整数に変換
-        // 精度向上のため、切り捨てを使用（実機の動作に合わせる）
-        val sampleIndexDouble = if (period > 0) (position * 32.0 / period) else 0.0
-        val sampleIndex = sampleIndexDouble.toInt().coerceIn(0, 31)
+        // ノイズを防ぐため、ビットマスクで範囲を制限
+        val sampleIndex = if (period > 0) {
+            ((position * 32.0 / period).toInt() and 0x1F)
+        } else {
+            0
+        }
 
         // 波形RAMからサンプルを読み取り（16バイト = 32サンプル）
         val byteIndex = (sampleIndex / 2).coerceIn(0, 15)
@@ -1117,9 +1150,10 @@ class Sound {
         }
 
         val sample = (nibble shr volumeShift) - 8 // -8 to 7
-        // 16bit範囲にスケール（より正確な計算）
+        // 16bit範囲にスケール（整数演算で丸め誤差を防ぐ）
         // 実機では、Waveチャンネルの出力は -8 to 7 の範囲で、16bit範囲にスケールされる
-        return (sample * 4096.0).toInt().coerceIn(-32768, 32767)
+        // スケール係数: 4096 / 4 = 1024（4チャンネルミキシングのヘッドルーム確保）
+        return (sample * 1024).coerceIn(-32768, 32767)
     }
 
     /**
@@ -1173,9 +1207,9 @@ class Sound {
 
         // ボリュームを適用（0-15を0-32767にスケール）
         // 実機では、ボリュームは0-15で、出力は noiseValue * volume で計算される
-        // 16bit範囲にスケールするため、2184.5を掛ける（15 * 2184.5 ≈ 32767.5）
-        // より正確なスケーリングのため、浮動小数点で計算
-        return (noiseValue * volume * 2184.5).toInt().coerceIn(-32768, 32767)
+        // 整数演算で計算（丸め誤差を防ぐ）
+        // スケール係数: 32767 / 15 / 4 = 546（4チャンネルミキシングのヘッドルーム確保）
+        return (noiseValue * volume * 546).coerceIn(-32768, 32767)
     }
 
     /**

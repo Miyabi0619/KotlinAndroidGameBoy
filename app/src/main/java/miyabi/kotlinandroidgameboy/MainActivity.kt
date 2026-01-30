@@ -14,6 +14,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import gb.core.api.CoreError
 import gb.core.api.CoreResult
@@ -394,12 +396,12 @@ private fun inputButtons(
 ) {
     val input = uiInputState.value
 
-    fun toggle(
-        current: Boolean,
+    // ボタンを押している間だけON、離すとOFF（ゲームボーイ本来の挙動）
+    fun setButton(
+        isPressed: Boolean,
         setter: (Boolean) -> InputState,
     ) {
-        val next = !current
-        val newState = setter(next)
+        val newState = setter(isPressed)
         uiInputState.value = newState
         onInputChanged(newState)
     }
@@ -411,19 +413,71 @@ private fun inputButtons(
     ) {
         // 十字キー
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { toggle(input.up) { v -> input.copy(up = v) } }) {
-                Text(if (input.up) "↑ ON" else "↑")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(up = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(up = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("↑")
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { toggle(input.left) { v -> input.copy(left = v) } }) {
-                Text(if (input.left) "← ON" else "←")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(left = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(left = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("←")
             }
-            Button(onClick = { toggle(input.down) { v -> input.copy(down = v) } }) {
-                Text(if (input.down) "↓ ON" else "↓")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(down = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(down = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("↓")
             }
-            Button(onClick = { toggle(input.right) { v -> input.copy(right = v) } }) {
-                Text(if (input.right) "→ ON" else "→")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(right = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(right = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("→")
             }
         }
 
@@ -432,17 +486,69 @@ private fun inputButtons(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            Button(onClick = { toggle(input.a) { v -> input.copy(a = v) } }) {
-                Text(if (input.a) "A ON" else "A")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(a = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(a = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("A")
             }
-            Button(onClick = { toggle(input.b) { v -> input.copy(b = v) } }) {
-                Text(if (input.b) "B ON" else "B")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(b = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(b = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("B")
             }
-            Button(onClick = { toggle(input.select) { v -> input.copy(select = v) } }) {
-                Text(if (input.select) "SELECT ON" else "SELECT")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(select = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(select = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("SELECT")
             }
-            Button(onClick = { toggle(input.start) { v -> input.copy(start = v) } }) {
-                Text(if (input.start) "START ON" else "START")
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { },
+                modifier =
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    setButton(true) { v -> input.copy(start = v) }
+                                    tryAwaitRelease()
+                                    setButton(false) { v -> input.copy(start = v) }
+                                },
+                            )
+                        },
+            ) {
+                Text("START")
             }
         }
     }

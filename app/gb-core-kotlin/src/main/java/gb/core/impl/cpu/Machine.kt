@@ -44,12 +44,13 @@ class Machine(
         val cycles = cpu.executeInstruction()
         timer.step(cycles)
         ppu.step(cycles)
-        sound.step(cycles)
+        sound.step(cycles, timer.getDivInternalCounter())
 
         val interruptCycles = handleInterrupts()
         if (interruptCycles > 0) {
             timer.step(interruptCycles)
-            sound.step(interruptCycles)
+            ppu.step(interruptCycles)
+            sound.step(interruptCycles, timer.getDivInternalCounter())
         }
 
         return cycles + interruptCycles
