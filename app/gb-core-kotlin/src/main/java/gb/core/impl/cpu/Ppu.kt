@@ -68,6 +68,7 @@ class Ppu(
     private var previousLy: UByte = 0x00u // 前回のLY値（VBlank割り込み検出用）
     private var currentMode: PpuMode = PpuMode.OAM_SEARCH // 現在のPPUモード（初期状態はMode 2）
     private var modeCycles: Int = 0 // 現在のモード内の累積サイクル数
+    private var mode3Duration: Int = 172 // 現在のスキャンラインのMode 3の長さ（可変）
 
     // DMA転送状態（SystemBusからアクセス可能にするため、publicにする）
     var dmaActive: Boolean = false
@@ -215,7 +216,8 @@ class Ppu(
                 dma = value
                 dmaSourceBase = (value.toUShort().toInt() shl 8).toUShort()
                 dmaActive = true
-                dmaCyclesRemaining = 160 // 160サイクルで転送完了
+                // 実機では160バイト × 4 T-cycles/バイト = 640 T-cyclesかかる
+                dmaCyclesRemaining = 640
             }
 
             0x07 -> {
@@ -322,13 +324,15 @@ class Ppu(
                 PpuMode.OAM_SEARCH -> {
                     // Mode 2: OAM Search（80サイクル）
                     if (modeCycles >= CYCLES_MODE_2) {
+                        // Mode 3に遷移する前に、このスキャンラインのMode 3の長さを計算
+                        mode3Duration = calculateMode3Duration()
                         setMode(PpuMode.PIXEL_TRANSFER)
                     }
                 }
 
                 PpuMode.PIXEL_TRANSFER -> {
-                    // Mode 3: Pixel Transfer（172-289サイクル、簡易実装として200サイクル）
-                    if (modeCycles >= 200) {
+                    // Mode 3: Pixel Transfer（172-289サイクル、スプライト数/SCX/ウィンドウにより可変）
+                    if (modeCycles >= mode3Duration) {
                         setMode(PpuMode.HBLANK)
                         // HBlank割り込みのチェック
                         checkStatInterrupt(PpuMode.HBLANK)
@@ -392,6 +396,54 @@ class Ppu(
                 interruptController.request(InterruptController.Type.LCD_STAT)
             }
         }
+    }
+
+    /**
+     * 現在のスキャンラインでのMode 3（Pixel Transfer）の長さを計算する。
+     *
+     * 実機ではMode 3の長さは以下の要素で変動する:
+     * - 基本: 172 T-cycles
+     * - SCX mod 8 による遅延: 0-7 T-cycles
+     * - スプライト数: 各スプライト最大6-11 T-cycles（平均約6）
+     * - ウィンドウの有無: 約6 T-cycles
+     */
+    private fun calculateMode3Duration(): Int {
+        val currentLy = ly.toInt()
+        if (currentLy >= SCREEN_HEIGHT) return CYCLES_MODE_3_MIN
+
+        var duration = CYCLES_MODE_3_MIN // 172 base
+
+        // SCX mod 8 によるペナルティ
+        duration += scx.toInt() and 0x07
+
+        // このスキャンラインのスプライト数をカウント
+        val lcdcInt = lcdc.toInt()
+        val spriteEnabled = (lcdcInt and 0x02) != 0
+        if (spriteEnabled) {
+            val spriteSize = if (((lcdcInt shr 2) and 0x1) == 0) 8 else 16
+            val oamSize = oam.size
+            var spriteCount = 0
+            for (i in 0 until 40) {
+                if (spriteCount >= 10) break
+                val oamIndex = i shl 2
+                if (oamIndex + 1 >= oamSize) continue
+                val spriteY = oam[oamIndex].toInt() - 16
+                if (currentLy >= spriteY && currentLy < spriteY + spriteSize) {
+                    spriteCount++
+                }
+            }
+            // 各スプライトにつき約6 T-cycles追加
+            duration += spriteCount * 6
+        }
+
+        // ウィンドウが有効で、このスキャンラインで描画される場合
+        val windowEnabled = (lcdcInt and 0x20) != 0
+        if (windowEnabled && currentLy >= wy.toInt() && wx.toInt() in 0..166) {
+            duration += 6
+        }
+
+        // 最大289 T-cyclesを超えないようにクランプ
+        return duration.coerceIn(CYCLES_MODE_3_MIN, CYCLES_MODE_3_MAX)
     }
 
     /**

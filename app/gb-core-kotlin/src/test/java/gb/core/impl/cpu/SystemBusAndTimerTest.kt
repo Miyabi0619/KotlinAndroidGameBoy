@@ -20,6 +20,7 @@ class SystemBusAndTimerTest {
         val vram = UByteArray(0x2000) { 0u }
         val oam = UByteArray(0xA0) { 0u }
         val ppu = Ppu(vram, oam, interruptController)
+        val sound = Sound()
         val bus =
             SystemBus(
                 rom = rom,
@@ -27,6 +28,7 @@ class SystemBusAndTimerTest {
                 timer = timer,
                 joypad = Joypad(interruptController),
                 ppu = ppu,
+                sound = sound,
             )
 
         // ROM 読み取り
@@ -52,6 +54,7 @@ class SystemBusAndTimerTest {
         val vram = UByteArray(0x2000) { 0u }
         val oam = UByteArray(0xA0) { 0u }
         val ppu = Ppu(vram, oam, interruptController)
+        val sound = Sound()
         val bus =
             SystemBus(
                 rom = rom,
@@ -59,6 +62,7 @@ class SystemBusAndTimerTest {
                 timer = timer,
                 joypad = Joypad(interruptController),
                 ppu = ppu,
+                sound = sound,
             )
 
         // IE: すべての割り込みを許可
@@ -71,11 +75,12 @@ class SystemBusAndTimerTest {
         bus.writeByte(0xFF05u, 0xFEu) // TIMA
         bus.writeByte(0xFF06u, 0xAAu) // TMA
 
-        // まずは DIV の確認: 256 サイクルごとに 1 インクリメント
+        // DIVの確認: 内部16bitカウンタが256に達するとDIVが1インクリメント
         timer.step(256)
         assertEquals(1u.toUByte(), timer.div)
 
-        // TIMA: period=1024 サイクルごとに 1 インクリメント
+        // TIMA: エッジ検出ベースなので、DIV内部カウンタのbit 9の立ち下がりでインクリメント
+        // bit 9は512ごとに0→1→0と遷移するため、1024サイクルで1回立ち下がりが発生
         timer.step(1024)
         assertEquals(0xFFu.toUByte(), timer.tima)
 

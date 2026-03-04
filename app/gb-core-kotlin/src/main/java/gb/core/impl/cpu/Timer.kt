@@ -3,19 +3,20 @@ package gb.core.impl.cpu
 /**
  * Game Boy のタイマ／DIV レジスタの実装。
  *
- * - DIV  (0xFF04): 内部クロック分周カウンタ（常にインクリメント）
+ * - DIV  (0xFF04): 内部16bitカウンタの上位8bit（常にインクリメント）
  * - TIMA (0xFF05): タイマカウンタ（オーバーフローで割り込み）
  * - TMA  (0xFF06): TIMA リロード値
  * - TAC  (0xFF07): タイマ制御（有効・無効＋クロック選択）
  *
- * CPU サイクル数を `step(cycles)` で受け取り、内部カウンタから
- * DIV/TIMA を更新する。TIMA オーバーフロー時には割り込みを発生させる。
+ * 実機ではDIVの内部16bitカウンタの特定ビットの立ち下がりエッジでTIMAを更新する。
+ * TAC変更やDIVリセット時にもエッジ検出が発生するため、グリッチが起こりうる。
  */
 class Timer(
     private val interruptController: InterruptController,
 ) {
-    var div: UByte = 0u
-        private set
+    // DIVは内部16bitカウンタの上位8bitを公開する
+    val div: UByte
+        get() = ((internalCounter shr 8) and 0xFF).toUByte()
 
     var tima: UByte = 0u
         private set
@@ -26,24 +27,19 @@ class Timer(
     var tac: UByte = 0u
         private set
 
-    // DIV 用の内部カウンタ（CPU サイクル数）
-    // 実機ではDIVは内部16bitカウンタの上位8bitを表示
-    // このカウンタは常にインクリメントされ、256サイクルごとにDIVが1増える
-    private var divCounter: Int = 0
+    // DIV の内部16bitカウンタ（T-cycle単位でインクリメント）
+    // 実機ではこのカウンタが常にインクリメントされ、上位8bitがDIVレジスタとなる
+    private var internalCounter: Int = 0
+
+    // TIMA オーバーフロー後の「遅延リロード」用カウンタ（T-cycle数）
+    private var timaOverflowDelayCycles: Int = -1
+    private var timaOverflowPending: Boolean = false
 
     /**
      * DIVの内部16bitカウンタを取得（APUのフレームシーケンサとの同期用）
      * 実機では、このカウンタのbit 12がフレームシーケンサのクロックソース
      */
-    fun getDivInternalCounter(): Int = divCounter
-
-    // TIMA 用の内部カウンタ（CPU サイクル数）
-    private var timaCounter: Int = 0
-
-    // TIMA オーバーフロー後の「遅延リロード」用カウンタ（CPU サイクル数）
-    // - オーバーフロー発生から 1 マシンサイクル後に TMA を再ロードし、TIMER 割り込みを要求する
-    private var timaOverflowDelayCycles: Int = -1
-    private var timaOverflowPending: Boolean = false
+    fun getDivInternalCounter(): Int = internalCounter
 
     fun readRegister(offset: Int): UByte =
         when (offset) {
@@ -60,9 +56,15 @@ class Timer(
     ) {
         when (offset) {
             0 -> {
-                // DIV に書き込むと 0 にクリアされる（値は無視）
-                div = 0u
-                divCounter = 0
+                // DIV に書き込むと内部16bitカウンタが 0 にクリアされる（値は無視）
+                // クリア前にエッジ検出を行う（グリッチの再現）
+                val oldBit = getTimaBit()
+                internalCounter = 0
+                val newBit = getTimaBit() // クリア後は必ず0
+                // 1→0の立ち下がりエッジでTIMAインクリメント
+                if (oldBit && !newBit) {
+                    incrementTima()
+                }
             }
             1 -> {
                 // 実機では、オーバーフロー遅延中に TIMA へ書き込むとリロードがキャンセルされる
@@ -72,7 +74,7 @@ class Timer(
             }
             2 -> {
                 // TMA 書き込み。オーバーフロー遅延中に書き込まれた場合は、
-                // リロード時に新しい値が反映される（現在の実装はこの挙動を満たす）
+                // リロード時に新しい値が反映される
                 tma = value
             }
             3 -> {
@@ -80,12 +82,19 @@ class Timer(
                 val oldTac = tac
                 tac = (value and 0x07u)
 
-                // TAC の有効ビット／クロックソースが変わった場合は、内部カウンタをリセット
-                // （実機では DIV ビットに依存したエッジ検出だが、ここでは簡易モデルとする）
-                val oldBits = oldTac.toInt() and 0b111
-                val newBits = tac.toInt() and 0b111
-                if (oldBits != newBits) {
-                    timaCounter = 0
+                // TAC変更時のエッジ検出（グリッチの再現）
+                // 旧TAC設定でのビット状態と新TAC設定でのビット状態を比較
+                val oldEnabled = (oldTac.toInt() and 0x04) != 0
+                val oldBitPos = tacToBitPosition(oldTac.toInt() and 0x03)
+                val oldBitValue = oldEnabled && ((internalCounter and (1 shl oldBitPos)) != 0)
+
+                val newEnabled = (tac.toInt() and 0x04) != 0
+                val newBitPos = tacToBitPosition(tac.toInt() and 0x03)
+                val newBitValue = newEnabled && ((internalCounter and (1 shl newBitPos)) != 0)
+
+                // 立ち下がりエッジ: 旧ビットが1で新ビットが0の場合
+                if (oldBitValue && !newBitValue) {
+                    incrementTima()
                 }
             }
             else -> error("Invalid timer register offset: $offset")
@@ -95,58 +104,85 @@ class Timer(
     /**
      * CPU サイクル数を進め、DIV/TIMA を更新する。
      *
-     * - DIV は常に 16384Hz（CPU クロック / 256）でインクリメント。
-     * - TIMA は TAC の設定に応じた周波数でインクリメントし、オーバーフロー時に
-     *   TIMA ← TMA、かつ Timer 割り込みを要求する。
+     * 実機ではDIVの内部16bitカウンタの特定ビットの立ち下がりエッジでTIMAを更新する。
      */
     fun step(cycles: Int) {
-        // DIV の更新（256 サイクルごとに 1 インクリメント）
-        divCounter += cycles
-        while (divCounter >= 256) {
-            divCounter -= 256
-            div = (div + 1u).toUByte()
+        for (i in 0 until cycles) {
+            stepOneTCycle()
         }
+    }
 
+    /**
+     * 1 T-cycle分の更新を行う。
+     * DIVの内部カウンタをインクリメントし、エッジ検出でTIMAを更新する。
+     */
+    private fun stepOneTCycle() {
         // TIMA オーバーフロー後の「遅延リロード」を処理
         if (timaOverflowPending) {
-            timaOverflowDelayCycles -= cycles
+            timaOverflowDelayCycles--
             if (timaOverflowDelayCycles <= 0) {
                 timaOverflowPending = false
                 timaOverflowDelayCycles = -1
-
-                // オーバーフロー完了: TMA を TIMA にリロードし、TIMER 割り込みを要求
                 tima = tma
                 interruptController.request(InterruptController.Type.TIMER)
             }
         }
 
-        // TAC bit2 が 1 のときだけ TIMA 有効
-        if ((tac.toInt() and 0b100) == 0) {
-            return
-        }
+        // TAC bit2 が 0 のときはTIMA更新なし（DIVカウンタは常に進む）
+        val timaEnabled = (tac.toInt() and 0x04) != 0
+        val oldBit = timaEnabled && getTimaBit()
 
-        val period =
-            when (tac.toInt() and 0b11) {
-                0 -> 1024 // CPU クロック / 1024
-                1 -> 16 // /16
-                2 -> 64 // /64
-                3 -> 256 // /256
-                else -> error("Invalid TAC value")
-            }
+        // 内部16bitカウンタをインクリメント（0xFFFFでラップアラウンド）
+        internalCounter = (internalCounter + 1) and 0xFFFF
 
-        timaCounter += cycles
-        while (timaCounter >= period) {
-            timaCounter -= period
-            if (tima == 0xFFu.toUByte()) {
-                // オーバーフロー。即座に 0 にし、1 マシンサイクル遅延後に TMA をリロードする。
-                tima = 0u
-                if (!timaOverflowPending) {
-                    timaOverflowPending = true
-                    timaOverflowDelayCycles = 4 // 約 1 マシンサイクル相当
-                }
-            } else {
-                tima = (tima + 1u).toUByte()
-            }
+        val newBit = timaEnabled && getTimaBit()
+
+        // 立ち下がりエッジ検出: 1→0 でTIMAインクリメント
+        if (oldBit && !newBit) {
+            incrementTima()
         }
+    }
+
+    /**
+     * 現在のTAC設定に基づき、内部カウンタの監視ビットの状態を返す。
+     */
+    private fun getTimaBit(): Boolean {
+        val bitPos = tacToBitPosition(tac.toInt() and 0x03)
+        return (internalCounter and (1 shl bitPos)) != 0
+    }
+
+    /**
+     * TIMAをインクリメントし、オーバーフロー時に遅延リロードを開始する。
+     */
+    private fun incrementTima() {
+        if (tima == 0xFFu.toUByte()) {
+            tima = 0u
+            if (!timaOverflowPending) {
+                timaOverflowPending = true
+                timaOverflowDelayCycles = 4
+            }
+        } else {
+            tima = (tima + 1u).toUByte()
+        }
+    }
+
+    companion object {
+        /**
+         * TACクロック選択値からDIV内部カウンタの監視ビット位置を返す。
+         *
+         * TAC clock select → DIVカウンタのビット位置:
+         * - 00: bit 9  (1024 T-cycle周期 = CPU/1024)
+         * - 01: bit 3  (16 T-cycle周期 = CPU/16)
+         * - 10: bit 5  (64 T-cycle周期 = CPU/64)
+         * - 11: bit 7  (256 T-cycle周期 = CPU/256)
+         */
+        private fun tacToBitPosition(clockSelect: Int): Int =
+            when (clockSelect) {
+                0 -> 9
+                1 -> 3
+                2 -> 5
+                3 -> 7
+                else -> 9
+            }
     }
 }

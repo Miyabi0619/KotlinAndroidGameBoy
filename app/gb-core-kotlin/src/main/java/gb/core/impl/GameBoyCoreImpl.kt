@@ -93,14 +93,27 @@ class GameBoyCoreImpl : GameBoyCore {
                 accumulatedCycles += cycles
                 instructionCount++
 
-                // HALT状態の場合、PPUを進めるために追加サイクルを渡す
-                // 実機では、HALT状態でもPPUは動作し続ける
-                // ただし、効率化のため、HALT状態が続く場合は一気にフレーム終了まで進める
+                // HALT状態の場合、全コンポーネントを同期して進める
+                // 実機では、HALT中もPPU/Timer/Soundは動作し続ける
+                // 割り込み発生でHALTから復帰するため、小刻みにステップを進める
                 if (m.cpu.isHalted() && accumulatedCycles < targetCyclesPerFrame) {
                     val remainingCycles = targetCyclesPerFrame - accumulatedCycles
-                    // 残りのサイクルを一気にPPUに渡す（割り込み待ちのため）
-                    m.ppu.step(remainingCycles)
-                    accumulatedCycles = targetCyclesPerFrame
+                    // stepInstructionが全コンポーネントを4サイクルずつ進めるので、
+                    // そのままループを継続する（HALT中はCPU NOP + 全コンポーネントstep）
+                    // ただし効率化のため、大量の残りサイクルがある場合はチャンク単位で処理
+                    if (remainingCycles > 456) {
+                        // 1スキャンライン(456 T-cycles)ずつ処理して割り込みチェック
+                        // これによりVBlank/Timer割り込みでHALTから復帰できる
+                        val chunk = 456
+                        val steps = remainingCycles / chunk
+                        for (s in 0 until steps) {
+                            if (!m.cpu.isHalted()) break
+                            val c = m.stepInstruction()
+                            accumulatedCycles += c
+                            instructionCount++
+                        }
+                    }
+                    // 残りが少ない場合は通常ループに任せる
                 }
 
                 // PCが進んでいるか確認（無限ループ検出）
