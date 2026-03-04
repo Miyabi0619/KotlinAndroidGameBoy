@@ -90,8 +90,7 @@ class Ppu(
      *
      * - 実機では Mode 2（OAM_SEARCH）および Mode 3 中は OAM 読み書き不可。
      */
-    fun isOamAccessible(): Boolean =
-        currentMode != PpuMode.OAM_SEARCH && currentMode != PpuMode.PIXEL_TRANSFER
+    fun isOamAccessible(): Boolean = currentMode != PpuMode.OAM_SEARCH && currentMode != PpuMode.PIXEL_TRANSFER
 
     /**
      * PPU I/O レジスタの読み取り。

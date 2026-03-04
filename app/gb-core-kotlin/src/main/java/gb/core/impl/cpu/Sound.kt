@@ -71,12 +71,11 @@ class Sound {
     private val waveRam: UByteArray = UByteArray(0x10) { 0u }
 
     // サウンド生成用の内部状態
-    // soundCycleCounterはサウンドサイクル単位（CPUサイクル/8）で管理
-    // 浮動小数点で精度を保持
-    // 精度向上のため、定期的に正規化（オーバーフローを防ぐ）
-    private var soundCycleCounter: Double = 0.0
-    private var frameStartSoundCycle: Double = 0.0 // フレーム開始時点のサウンドサイクル
-    private val maxSoundCycle = 1e9 // 正規化用の最大値（約19時間分）
+    // 半サウンドサイクル単位（CPUサイクル/4）で整数管理
+    // CPUサイクルは常に4の倍数なので、/4で常に整数になる
+    // これにより浮動小数点の精度劣化を完全に回避
+    private var halfSoundCycleCounter: Long = 0L
+    private var frameStartHalfSoundCycle: Long = 0L
 
     // フレームシーケンサ（512Hz = SOUND_FREQUENCY / 1024 = 8192 Hz / 16）
     // 8ステップ（0-7）で Length / Sweep / Envelope を更新する
@@ -128,8 +127,9 @@ class Sound {
                     val period = (2048.0 - frequency) * 8.0
                     if (period > 0) {
                         // 現在再生中のサンプル位置を計算（32サンプル中）
-                        // soundCycleCounterから現在の位置を計算
-                        val position = (soundCycleCounter % period) * 32.0 / period
+                        // 半サウンドサイクルカウンタから現在の位置を計算
+                        val soundCycle = halfSoundCycleCounter / 2.0
+                        val position = (soundCycle % period) * 32.0 / period
                         val sampleIndex = position.toInt().coerceIn(0, 31)
 
                         // 現在再生中のサンプル位置のバイトインデックス
@@ -468,7 +468,7 @@ class Sound {
                     // LFSRの初期化（Trigger時にリセット）
                     noiseState.lfsr = 0x7FFF
                     noiseState.lfsrCounter = 0
-                    noiseState.lfsrCounterAccumulator = 0.0
+                    noiseState.lfsrHalfCycleAccumulator = 0L
                     // 長さカウンタの初期化（Length Enableが有効な場合）
                     if ((value.toInt() and 0x40) != 0) {
                         noiseState.lengthEnabled = true
@@ -507,19 +507,9 @@ class Sound {
         cycles: Int,
         divInternalCounter: Int,
     ) {
-        // サウンド処理はCPU周波数の1/8で動作
-        // soundCycleCounterはサウンドサイクル単位で管理（浮動小数点で精度を保持）
-        // より正確なタイミング同期のため、浮動小数点で累積
-        val soundCyclesDouble = cycles / 8.0
-        soundCycleCounter += soundCyclesDouble
-
-        // 精度向上のため、定期的に正規化（オーバーフローを防ぐ）
-        // フレーム開始時点も同時に正規化して、相対的な位置を保持
-        if (soundCycleCounter > maxSoundCycle) {
-            val offset = frameStartSoundCycle
-            soundCycleCounter -= offset
-            frameStartSoundCycle = 0.0
-        }
+        // 半サウンドサイクル = CPUサイクル / 4（常に整数）
+        val halfSoundCycles = cycles / 4
+        halfSoundCycleCounter += halfSoundCycles
 
         // フレームシーケンサ（512Hz）をDIVレジスタのbit 12の立ち下がりエッジで進める
         // 実機仕様: DIVレジスタの内部16bitカウンタのbit 12が1→0になるタイミングで更新
@@ -531,7 +521,7 @@ class Sound {
         lastDivBit12 = currentDivBit12
 
         // Noise の LFSR は周波数に従って常時更新する（フレームシーケンサとは独立）
-        advanceNoiseLfsr(soundCyclesDouble)
+        advanceNoiseLfsr(halfSoundCycles)
     }
 
     /**
@@ -588,17 +578,15 @@ class Sound {
             return ShortArray(SAMPLES_PER_FRAME * 2) { 0 }
         }
 
-        // フレーム開始時点のサウンドサイクルを記録（より正確なタイミング同期）
-        // 1フレーム = 70224 CPUサイクル = 70224 / 8 = 8778 サウンドサイクル
-        val cyclesPerFrame = 70224 / 8.0
+        // フレーム開始時点を記録（半サウンドサイクル単位）
+        // 1フレーム = 70224 CPUサイクル = 70224 / 4 = 17556 半サウンドサイクル
+        val halfCyclesPerFrame = 70224 / 4
 
-        // 現在のフレームの開始時点を記録
-        // 最初のフレームでは0から開始、以降は前回のフレーム終了時点を使用
-        val currentFrameStart = frameStartSoundCycle
+        val currentFrameStartHalf = frameStartHalfSoundCycle
+        frameStartHalfSoundCycle = currentFrameStartHalf + halfCyclesPerFrame
 
-        // 次のフレームの開始時点を更新（現在のフレーム開始時点 + 1フレーム分）
-        // これにより、サンプル生成のタイミングが正確に保たれる
-        frameStartSoundCycle = currentFrameStart + cyclesPerFrame
+        // サンプル生成用にDoubleに変換（サウンドサイクル単位）
+        val currentFrameStart = currentFrameStartHalf / 2.0
 
         // 各サンプルごとに生成
         // 1サンプルあたりのサウンドサイクル数
@@ -795,11 +783,12 @@ class Sound {
         val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
         // デューティ比の位置を計算（0-7の範囲）
         // 精度を保つため、8を掛けてから周期で割る
-        val dutyPosition = if (period > 0) {
-            ((positionInPeriod * 8.0 / period).toInt() and 0x07)
-        } else {
-            0
-        }
+        val dutyPosition =
+            if (period > 0) {
+                ((positionInPeriod * 8.0 / period).toInt() and 0x07)
+            } else {
+                0
+            }
         // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
         // 実機では、dutyPositionは0-7の範囲で、dutyPatternの対応するビットをチェック
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
@@ -873,11 +862,12 @@ class Sound {
         val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
         // デューティ比の位置を計算（0-7の範囲）
         // ノイズを防ぐため、ビットマスクで範囲を制限
-        val dutyPosition = if (period > 0) {
-            ((positionInPeriod * 8.0 / period).toInt() and 0x07)
-        } else {
-            0
-        }
+        val dutyPosition =
+            if (period > 0) {
+                ((positionInPeriod * 8.0 / period).toInt() and 0x07)
+            } else {
+                0
+            }
         // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
 
@@ -927,13 +917,9 @@ class Sound {
         var envelopeDirection = 1
         var lfsr = 0x7FFF // Linear Feedback Shift Register
         var lfsrCounter = 0 // LFSR更新用カウンタ（整数）
-        var lfsrCounterAccumulator = 0.0 // LFSR更新用カウンタ（浮動小数点、サンプル生成時の精度向上のため）
+        var lfsrHalfCycleAccumulator = 0L // LFSR更新用カウンタ（半サウンドサイクル単位、整数）
     }
 
-    /**
-     * Square 1チャンネルの状態を更新（エンベロープのみ）
-     * 長さカウンタはupdateLengthCounters()で更新される
-     */
     /**
      * Square 1チャンネルのエンベロープを更新（フレームシーケンサの64Hzステップで呼ばれる）
      *
@@ -1050,15 +1036,12 @@ class Sound {
     }
 
     /**
-     * フレームシーケンサ（512Hz）を進め、Length / Sweep / Envelope を更新する。
+     * フレームシーケンサを1ステップ進める（DIVのbit 12立ち下がりエッジで呼ばれる）。
      *
      * - 512Hz ステップごとに frameSequencerStep (0-7) が進む。
      * - ステップ 0,2,4,6: 256Hz Length カウンタ
      * - ステップ 2,6: 128Hz Sweep（Square1）
      * - ステップ 7: 64Hz Envelope（Square1/2/Noise）
-     */
-    /**
-     * フレームシーケンサを1ステップ進める（DIVのbit 12立ち下がりエッジで呼ばれる）
      */
     private fun advanceFrameSequencerStep() {
         frameSequencerStep = (frameSequencerStep + 1) and 0x07
@@ -1088,7 +1071,7 @@ class Sound {
     /**
      * Noise の LFSR を周波数に従って進める（フレームシーケンサとは独立）。
      */
-    private fun advanceNoiseLfsr(soundCyclesDouble: Double) {
+    private fun advanceNoiseLfsr(halfSoundCycles: Int) {
         if (!noiseState.enabled) {
             return
         }
@@ -1100,27 +1083,26 @@ class Sound {
         val r = nr43.toInt() and 0x07
         val s = (nr43.toInt() shr 4) and 0x0F
 
-        val periodCycles =
+        // 半サウンドサイクル単位の周期（元のサウンドサイクル周期 * 2）
+        val periodHalfCycles =
             if (s < 16) {
                 if (r == 0) {
-                    // 0.5 * 2^(s+1) * 8 = 2^s * 8
-                    (1L shl s) * 8L
+                    (1L shl s) * 16L
                 } else {
-                    r.toLong() * (1L shl (s + 1)) * 8L
+                    r.toLong() * (1L shl (s + 1)) * 16L
                 }
             } else {
                 0L
             }
 
-        if (periodCycles <= 0) {
+        if (periodHalfCycles <= 0) {
             return
         }
 
-        noiseState.lfsrCounterAccumulator += soundCyclesDouble
-        val periodDouble = periodCycles.toDouble()
+        noiseState.lfsrHalfCycleAccumulator += halfSoundCycles
 
-        while (noiseState.lfsrCounterAccumulator >= periodDouble) {
-            noiseState.lfsrCounterAccumulator -= periodDouble
+        while (noiseState.lfsrHalfCycleAccumulator >= periodHalfCycles) {
+            noiseState.lfsrHalfCycleAccumulator -= periodHalfCycles
 
             // XOR = bit 0 XOR bit 1
             val xor = (noiseState.lfsr xor (noiseState.lfsr shr 1)) and 1
@@ -1136,7 +1118,7 @@ class Sound {
             }
         }
 
-        noiseState.lfsrCounter = noiseState.lfsrCounterAccumulator.toInt()
+        noiseState.lfsrCounter = (noiseState.lfsrHalfCycleAccumulator / 2).toInt()
     }
 
     /**
@@ -1177,11 +1159,12 @@ class Sound {
         val position = if (period > 0) (soundCycle % period) else 0.0
         // 32サンプルの波形なので、位置を0-31の範囲に正規化
         // ノイズを防ぐため、ビットマスクで範囲を制限
-        val sampleIndex = if (period > 0) {
-            ((position * 32.0 / period).toInt() and 0x1F)
-        } else {
-            0
-        }
+        val sampleIndex =
+            if (period > 0) {
+                ((position * 32.0 / period).toInt() and 0x1F)
+            } else {
+                0
+            }
 
         // 波形RAMからサンプルを読み取り（16バイト = 32サンプル）
         val byteIndex = (sampleIndex / 2).coerceIn(0, 15)
@@ -1261,9 +1244,6 @@ class Sound {
         return (noiseValue * volume * 546).coerceIn(-32768, 32767)
     }
 
-    /**
-     * Square 1のスイープ処理を更新
-     */
     /**
      * Sweepを更新（フレームシーケンサの128Hzステップで呼ばれる）
      *
