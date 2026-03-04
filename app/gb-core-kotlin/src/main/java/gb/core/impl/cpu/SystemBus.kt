@@ -75,6 +75,12 @@ class SystemBus(
 
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
+
+        // DMA転送中（160サイクル）は、HRAM（0xFF80-0xFFFE）以外へのアクセスは0xFFを返す（実機仕様）
+        if (ppu.dmaActive && addr !in 0xFF80..0xFFFE) {
+            return 0xFFu
+        }
+
         return readByteInternal(addr)
     }
 
@@ -152,6 +158,12 @@ class SystemBus(
         value: UByte,
     ) {
         val addr = address.toInt()
+
+        // DMA転送中（160サイクル）は、HRAM（0xFF80-0xFFFE）以外への書き込みは無視される（実機仕様）
+        if (ppu.dmaActive && addr !in 0xFF80..0xFFFE) {
+            return
+        }
+
         when (addr) {
             in 0x0000..0x7FFF -> {
                 // MBC 制御レジスタ

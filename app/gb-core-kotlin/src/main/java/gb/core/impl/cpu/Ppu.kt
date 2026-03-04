@@ -699,9 +699,10 @@ class Ppu(
                 }
             }
 
-            // スプライトを描画（OAMの順序（インデックス昇順）で描画：実機の仕様に準拠）
-            // 後から描画されたスプライトが前に描画されたスプライトの上に描画される
-            for (i in spritesOnLine) {
+            // スプライトを描画（OAMの逆順で描画：実機の仕様に準拠）
+            // 同一X座標時はOAMの若い番号が優先されるため、降順で描画する
+            // （後から描画されたものが上に来るため、若い番号を後で描画）
+            for (i in spritesOnLine.reversed()) {
                 val oamIndex = i shl 2 // i * 4 をビットシフトに置き換え
                 if (oamIndex + 3 >= oamSize) continue
                 val spriteY = oam[oamIndex].toInt() - 16

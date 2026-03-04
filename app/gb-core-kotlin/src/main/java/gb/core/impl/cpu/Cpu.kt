@@ -134,14 +134,14 @@ class Cpu(
 
         val pcBefore = registers.pc
 
-        // HALTバグが発生している場合、PCを進めずに同じ命令を読み取る
-        val opcode =
-            if (haltBugActive) {
-                haltBugActive = false // バグは1回だけ発生
-                bus.readByte(pcBefore).toInt()
-            } else {
-                bus.readByte(pcBefore).toInt()
-            }
+        // HALTバグ: 前回の命令でHALTバグが発生した場合、
+        // オペコードは正常に読むが、PC をインクリメントしない（ダブルフェッチ）
+        val skipPcIncrement = haltBugActive
+        if (haltBugActive) {
+            haltBugActive = false
+        }
+
+        val opcode = bus.readByte(pcBefore).toInt()
 
         // HALT命令（0x76）の場合は、HALTバグのチェックが必要
         // HALTバグ: IME=0 かつ (IE & IF) != 0 の場合、HALTは実行されずにPCが進まない
@@ -149,15 +149,16 @@ class Cpu(
             val ifReg = bus.readByte(0xFF0Fu.toUShort())
             val ieReg = bus.readByte(0xFFFFu.toUShort())
             if ((ifReg.toInt() and ieReg.toInt()) != 0) {
-                // HALTバグ: PCを進めない、次の命令がダブルフェッチされる
+                // HALTバグ: HALT状態には入らない
+                // PCはHALTの次に進めるが、次の命令でPCインクリメントをスキップ
                 haltBugActive = true
-                // HALT状態には入らない
+                registers.pc = (pcBefore.toInt() + 1).toUShort()
                 return Cycles.NOP
             }
         }
 
-        // 次の命令に備えて PC を 1 バイト分進める（HALTバグの場合は進めない）
-        if (!haltBugActive) {
+        // 次の命令に備えて PC を 1 バイト分進める（HALTバグのダブルフェッチ時はスキップ）
+        if (!skipPcIncrement) {
             registers.pc = (pcBefore.toInt() + 1).toUShort()
         }
 

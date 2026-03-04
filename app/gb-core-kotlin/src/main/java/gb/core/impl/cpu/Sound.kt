@@ -124,8 +124,8 @@ class Sound {
                 val frequency = ((nr34.toInt() and 0x07) shl 8) or nr33.toInt()
 
                 if (frequency > 0 && frequency < 2048) {
-                    // 周期を計算（Waveチャンネル本体と同じ *16.0 を使用）
-                    val period = (2048.0 - frequency) * 16.0
+                    // 周期を計算（Waveチャンネル本体と同じ *8.0 を使用）
+                    val period = (2048.0 - frequency) * 8.0
                     if (period > 0) {
                         // 現在再生中のサンプル位置を計算（32サンプル中）
                         // soundCycleCounterから現在の位置を計算
@@ -223,14 +223,21 @@ class Sound {
                 val newValue = (value and 0x80u.toUByte()) or (currentValue and 0x7Fu.toUByte())
                 soundRegs[offset] = newValue
 
-                // NR52[7]=0に書き込むと全チャンネルを無効化
+                // NR52[7]=0に書き込むと全チャンネルを無効化し、全レジスタをクリア（実機仕様）
                 val soundEnabled = (newValue.toInt() and 0x80) != 0
                 if (!soundEnabled) {
+                    // チャンネルを無効化
                     square1State.enabled = false
                     square2State.enabled = false
                     waveState.enabled = false
                     noiseState.enabled = false
                     sweepEnabled = false
+
+                    // 全サウンドレジスタをクリア（NR52以外）
+                    for (i in 0x00..0x15) {
+                        soundRegs[i] = 0u
+                    }
+                    // Wave RAMはクリアしない（実機仕様）
                 }
             }
 
@@ -250,6 +257,10 @@ class Sound {
                 square1State.envelopePeriod = value.toInt() and 0x07
                 square1State.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
                 square1State.envelopeCounter = 0
+                // DAC無効化チェック: NR12の上位5ビットが全て0の場合、DACが無効化される（実機仕様）
+                if ((value.toInt() and 0xF8) == 0) {
+                    square1State.enabled = false
+                }
             }
 
             0x04 -> { // NR14 (Square 1 Frequency High & Trigger)
@@ -261,10 +272,15 @@ class Sound {
                         return // サウンドが無効な場合、トリガーを無視
                     }
 
+                    // DAC無効化チェック: NR12の上位5ビットが全て0の場合、トリガーを無視（実機仕様）
+                    val nr12 = soundRegs[0x02]
+                    if ((nr12.toInt() and 0xF8) == 0) {
+                        return // DACが無効な場合、トリガーを無視
+                    }
+
                     // チャンネルを有効化
                     square1State.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
-                    val nr12 = soundRegs[0x02]
                     square1State.envelopeVolume = (nr12.toInt() shr 4) and 0x0F
                     // エンベロープカウンタをピリオド値で初期化（実機仕様）
                     val envelopePeriod = nr12.toInt() and 0x07
@@ -284,13 +300,14 @@ class Sound {
                     // スイープの初期化
                     val nr10 = soundRegs[0x00]
                     sweepPeriod = ((nr10.toInt() shr 4) and 0x07)
-                    sweepEnabled = sweepPeriod > 0 || (nr10.toInt() and 0x08) != 0
-                    sweepCounter = 0
-                    sweepNegate = (nr10.toInt() and 0x08) != 0
                     sweepShift = nr10.toInt() and 0x07
+                    sweepNegate = (nr10.toInt() and 0x08) != 0
+                    sweepEnabled = sweepPeriod > 0 || sweepShift > 0
+                    // トリガー時にsweepCounterをピリオド値で初期化（実機仕様）
+                    sweepCounter = if (sweepPeriod == 0) 8 else sweepPeriod
                     val frequency = ((value.toInt() and 0x07) shl 8) or soundRegs[0x03].toInt()
                     shadowFrequency = frequency
-                    sweepInitialized = false // 最初の更新を遅延させる
+                    sweepInitialized = false
                 }
             }
 
@@ -303,6 +320,10 @@ class Sound {
                 square2State.envelopePeriod = value.toInt() and 0x07
                 square2State.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
                 square2State.envelopeCounter = 0
+                // DAC無効化チェック: NR22の上位5ビットが全て0の場合、DACが無効化される（実機仕様）
+                if ((value.toInt() and 0xF8) == 0) {
+                    square2State.enabled = false
+                }
             }
 
             0x08 -> { // NR24 (Square 2 Frequency High & Trigger)
@@ -314,9 +335,14 @@ class Sound {
                         return // サウンドが無効な場合、トリガーを無視
                     }
 
+                    // DAC無効化チェック: NR22の上位5ビットが全て0の場合、トリガーを無視（実機仕様）
+                    val nr22 = soundRegs[0x06]
+                    if ((nr22.toInt() and 0xF8) == 0) {
+                        return // DACが無効な場合、トリガーを無視
+                    }
+
                     square2State.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
-                    val nr22 = soundRegs[0x06]
                     square2State.envelopeVolume = (nr22.toInt() shr 4) and 0x0F
                     // エンベロープカウンタをピリオド値で初期化（実機仕様）
                     val envelopePeriod = nr22.toInt() and 0x07
@@ -408,6 +434,10 @@ class Sound {
                 noiseState.envelopePeriod = value.toInt() and 0x07
                 noiseState.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
                 noiseState.envelopeCounter = 0
+                // DAC無効化チェック: NR42の上位5ビットが全て0の場合、DACが無効化される（実機仕様）
+                if ((value.toInt() and 0xF8) == 0) {
+                    noiseState.enabled = false
+                }
             }
 
             0x13 -> { // NR43 (Noise Polynomial)
@@ -423,9 +453,14 @@ class Sound {
                         return // サウンドが無効な場合、トリガーを無視
                     }
 
+                    // DAC無効化チェック: NR42の上位5ビットが全て0の場合、トリガーを無視（実機仕様）
+                    val nr42 = soundRegs[0x12]
+                    if ((nr42.toInt() and 0xF8) == 0) {
+                        return // DACが無効な場合、トリガーを無視
+                    }
+
                     noiseState.enabled = true
                     // エンベロープの初期化（Trigger時にリセット）
-                    val nr42 = soundRegs[0x12]
                     noiseState.envelopeVolume = (nr42.toInt() shr 4) and 0x0F
                     // エンベロープカウンタをピリオド値で初期化（実機仕様）
                     val envelopePeriod = nr42.toInt() and 0x07
@@ -1058,7 +1093,7 @@ class Sound {
             return
         }
 
-        val nr43 = soundRegs[0x12]
+        val nr43 = soundRegs[0x13] // NR43 (Polynomial Counter)
 
         // 仕様: 周波数 = 524288 Hz / r / 2^(s+1)
         // r = 0 の場合は 0.5
@@ -1176,7 +1211,7 @@ class Sound {
      * @param soundCycle サウンドサイクル単位のタイミング（Double型で精度を保持）
      */
     private fun generateNoiseSample(soundCycle: Double): Int {
-        val nr43 = soundRegs[0x12] // NR43 (Polynomial)
+        val nr43 = soundRegs[0x13] // NR43 (Polynomial Counter)
 
         if (!noiseState.enabled) {
             return 0
@@ -1250,13 +1285,6 @@ class Sound {
             return
         }
 
-        // スイープが有効な場合のみ処理
-        if (!sweepInitialized) {
-            sweepInitialized = true
-            sweepCounter = currentSweepPeriod
-            return
-        }
-
         // カウンタをデクリメント
         sweepCounter--
         if (sweepCounter > 0) {
@@ -1264,7 +1292,7 @@ class Sound {
         }
 
         // カウンタが0になったら周波数を更新してリロード
-        sweepCounter = currentSweepPeriod
+        sweepCounter = if (currentSweepPeriod == 0) 8 else currentSweepPeriod
 
         // 周波数を更新
         // 実機の仕様: change = shadowFrequency >> sweepShift

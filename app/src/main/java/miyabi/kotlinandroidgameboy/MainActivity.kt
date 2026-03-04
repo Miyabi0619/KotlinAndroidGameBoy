@@ -394,14 +394,12 @@ private fun inputButtons(
     uiInputState: MutableState<InputState>,
     onInputChanged: (InputState) -> Unit,
 ) {
-    val input = uiInputState.value
-
     // ボタンを押している間だけON、離すとOFF（ゲームボーイ本来の挙動）
     fun setButton(
         isPressed: Boolean,
-        setter: (Boolean) -> InputState,
+        setter: (InputState, Boolean) -> InputState,
     ) {
-        val newState = setter(isPressed)
+        val newState = setter(uiInputState.value, isPressed)
         uiInputState.value = newState
         onInputChanged(newState)
     }
@@ -420,9 +418,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(up = v) }
+                                    setButton(true) { state, pressed -> state.copy(up = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(up = v) }
+                                    setButton(false) { state, pressed -> state.copy(up = pressed) }
                                 },
                             )
                         },
@@ -438,9 +436,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(left = v) }
+                                    setButton(true) { state, pressed -> state.copy(left = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(left = v) }
+                                    setButton(false) { state, pressed -> state.copy(left = pressed) }
                                 },
                             )
                         },
@@ -454,9 +452,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(down = v) }
+                                    setButton(true) { state, pressed -> state.copy(down = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(down = v) }
+                                    setButton(false) { state, pressed -> state.copy(down = pressed) }
                                 },
                             )
                         },
@@ -470,9 +468,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(right = v) }
+                                    setButton(true) { state, pressed -> state.copy(right = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(right = v) }
+                                    setButton(false) { state, pressed -> state.copy(right = pressed) }
                                 },
                             )
                         },
@@ -493,9 +491,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(a = v) }
+                                    setButton(true) { state, pressed -> state.copy(a = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(a = v) }
+                                    setButton(false) { state, pressed -> state.copy(a = pressed) }
                                 },
                             )
                         },
@@ -509,9 +507,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(b = v) }
+                                    setButton(true) { state, pressed -> state.copy(b = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(b = v) }
+                                    setButton(false) { state, pressed -> state.copy(b = pressed) }
                                 },
                             )
                         },
@@ -525,9 +523,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(select = v) }
+                                    setButton(true) { state, pressed -> state.copy(select = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(select = v) }
+                                    setButton(false) { state, pressed -> state.copy(select = pressed) }
                                 },
                             )
                         },
@@ -541,9 +539,9 @@ private fun inputButtons(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = {
-                                    setButton(true) { v -> input.copy(start = v) }
+                                    setButton(true) { state, pressed -> state.copy(start = pressed) }
                                     tryAwaitRelease()
-                                    setButton(false) { v -> input.copy(start = v) }
+                                    setButton(false) { state, pressed -> state.copy(start = pressed) }
                                 },
                             )
                         },
