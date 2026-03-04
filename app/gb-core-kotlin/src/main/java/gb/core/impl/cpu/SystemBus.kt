@@ -23,7 +23,7 @@ class SystemBus(
     private val vram: UByteArray = UByteArray(0x2000) { 0u },
     private val oam: UByteArray = UByteArray(0xA0) { 0u },
     private val hram: UByteArray = UByteArray(0x7F) { 0u },
-    private val cartridgeRam: UByteArray? = null,
+    internal val cartridgeRam: UByteArray? = null,
     private val interruptController: InterruptController,
     private val timer: Timer,
     joypad: Joypad,

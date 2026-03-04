@@ -22,6 +22,21 @@ class Machine(
     val cpu: Cpu
     val ppu: Ppu
 
+    /** バッテリバックアップ付きカートリッジかどうか */
+    val hasBattery: Boolean
+
+    /** カートリッジRAMの内容を取得（セーブデータ永続化用） */
+    fun getCartridgeRam(): ByteArray? = bus.cartridgeRam?.toByteArray()
+
+    /** カートリッジRAMにデータをロード（セーブデータ復元用） */
+    fun loadCartridgeRam(data: ByteArray) {
+        val ram = bus.cartridgeRam ?: return
+        val copySize = minOf(data.size, ram.size)
+        for (i in 0 until copySize) {
+            ram[i] = data[i].toUByte()
+        }
+    }
+
     /**
      * デバッグ用: IFレジスタを読み取る
      */
@@ -92,6 +107,10 @@ class Machine(
     }
 
     init {
+        // カートリッジタイプからバッテリバックアップの有無を判定
+        val cartridgeType = rom.getOrNull(0x0147)?.toInt() ?: 0
+        hasBattery = cartridgeType == 0x03 // MBC1+RAM+BATTERY
+
         val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
         val vram = UByteArray(0x2000) { 0u }
         val oam = UByteArray(0xA0) { 0u }

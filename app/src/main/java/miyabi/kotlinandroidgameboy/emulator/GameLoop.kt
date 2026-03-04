@@ -5,6 +5,7 @@ import gb.core.api.FrameResult
 import gb.core.api.GameBoyCore
 import gb.core.api.InputState
 import gb.core.api.SaveState
+import gb.core.impl.GameBoyCoreImpl
 
 /**
  * GameBoy エミュレーションを 1 フレーム単位で制御するシンプルなループクラス。
@@ -43,4 +44,21 @@ class GameLoop(
      * セーブステートから状態を復元する。
      */
     fun loadState(state: SaveState): CoreResult<Unit> = core.loadState(state)
+
+    /**
+     * バッテリバックアップ付きカートリッジかどうかを返す。
+     */
+    fun hasBattery(): Boolean = (core as? GameBoyCoreImpl)?.hasBattery() ?: false
+
+    /**
+     * カートリッジRAMの内容を取得する（.savファイル保存用）。
+     */
+    fun getCartridgeRam(): ByteArray? = (core as? GameBoyCoreImpl)?.getCartridgeRam()
+
+    /**
+     * カートリッジRAMにデータをロードする（.savファイル復元用）。
+     */
+    fun loadCartridgeRam(data: ByteArray) {
+        (core as? GameBoyCoreImpl)?.loadCartridgeRam(data)
+    }
 }

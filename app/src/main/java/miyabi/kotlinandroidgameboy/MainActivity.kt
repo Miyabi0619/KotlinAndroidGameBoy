@@ -1,10 +1,12 @@
 package miyabi.kotlinandroidgameboy
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -103,6 +105,7 @@ private fun gameScreen(
     var romLoaded by remember { mutableStateOf(false) }
     var isRunning by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var currentSavFileName by remember { mutableStateOf<String?>(null) }
 
     // 画面上のボタンからの入力
     var uiInput by remember { mutableStateOf(InputState()) }
@@ -141,6 +144,10 @@ private fun gameScreen(
                 when (val result = gameLoop.loadRomAndReset(romBytes)) {
                     is CoreResult.Success -> {
                         android.util.Log.d("GameLoop", "ROM loaded successfully")
+                        // セーブファイル名を導出し、バッテリバックアップがあればロード
+                        val savName = deriveSavFileName(uri)
+                        currentSavFileName = savName
+                        loadCartridgeRam(context, savName, gameLoop)
                         romLoaded = true
                         errorMessage = null
                     }
@@ -259,8 +266,8 @@ private fun gameScreen(
                         val skipRate = if (frameCount > 0) (skippedFrames * 100.0 / frameCount) else 0.0
                         android.util.Log.d(
                             "GameLoop",
-                            "Frame $frameCount: FPS=${String.format("%.2f", actualFps)}, " +
-                                "skipped=$skippedFrames (${String.format("%.1f", skipRate)}%), " +
+                            "Frame $frameCount: FPS=${String.format(java.util.Locale.US, "%.2f", actualFps)}, " +
+                                "skipped=$skippedFrames (${String.format(java.util.Locale.US, "%.1f", skipRate)}%), " +
                                 "audioBuffer=$audioBufferSize",
                         )
                     }
@@ -282,7 +289,11 @@ private fun gameScreen(
             if (elapsed > targetFrameTime * 1.5) {
                 if (frameCount % 300 == 0) {
                     val actualFps = 1000.0 / elapsed
-                    android.util.Log.w("GameLoop", "Frame rate too slow: ${String.format("%.2f", actualFps)} Hz (target: 59.73 Hz)")
+                    val fpsStr = String.format(java.util.Locale.US, "%.2f", actualFps)
+                    android.util.Log.w(
+                        "GameLoop",
+                        "Frame rate too slow: $fpsStr Hz (target: 59.73 Hz)",
+                    )
                 }
             }
 
@@ -294,6 +305,10 @@ private fun gameScreen(
             }
 
             lastFrameTime = frameEndTime
+        }
+        // ゲームループ停止時にセーブデータを保存
+        currentSavFileName?.let { savName ->
+            saveCartridgeRam(context, savName, gameLoop)
         }
         android.util.Log.d("GameLoop", "Game loop stopped")
     }
@@ -566,6 +581,56 @@ private fun mergeInput(
         left = ui.left || controller.left,
         right = ui.right || controller.right,
     )
+
+/**
+ * ROM URIからセーブファイル名を導出する。
+ * URIの最後のパスセグメントから拡張子を.savに変更する。
+ */
+private fun deriveSavFileName(uri: Uri): String {
+    val lastSegment = uri.lastPathSegment ?: "unknown"
+    val baseName = lastSegment.substringAfterLast('/').substringBeforeLast('.')
+    return "$baseName.sav"
+}
+
+/**
+ * セーブデータをファイルに保存する。
+ */
+private fun saveCartridgeRam(
+    context: Context,
+    savFileName: String,
+    gameLoop: GameLoop,
+) {
+    if (!gameLoop.hasBattery()) return
+    val ramData = gameLoop.getCartridgeRam() ?: return
+    try {
+        val savFile = java.io.File(context.filesDir, savFileName)
+        savFile.writeBytes(ramData)
+        android.util.Log.d("SaveData", "Saved $savFileName (${ramData.size} bytes)")
+    } catch (e: java.io.IOException) {
+        android.util.Log.e("SaveData", "Failed to save $savFileName: ${e.message}")
+    }
+}
+
+/**
+ * セーブデータをファイルから読み込む。
+ */
+private fun loadCartridgeRam(
+    context: Context,
+    savFileName: String,
+    gameLoop: GameLoop,
+) {
+    if (!gameLoop.hasBattery()) return
+    try {
+        val savFile = java.io.File(context.filesDir, savFileName)
+        if (savFile.exists()) {
+            val ramData = savFile.readBytes()
+            gameLoop.loadCartridgeRam(ramData)
+            android.util.Log.d("SaveData", "Loaded $savFileName (${ramData.size} bytes)")
+        }
+    } catch (e: java.io.IOException) {
+        android.util.Log.e("SaveData", "Failed to load $savFileName: ${e.message}")
+    }
+}
 
 private fun toErrorMessage(error: CoreError): String =
     when (error) {

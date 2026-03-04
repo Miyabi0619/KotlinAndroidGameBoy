@@ -247,6 +247,28 @@ class GameBoyCoreImpl : GameBoyCore {
         }
     }
 
+    /**
+     * バッテリバックアップ付きカートリッジかどうかを返す。
+     */
+    fun hasBattery(): Boolean = machine?.hasBattery ?: false
+
+    /**
+     * カートリッジRAMの内容を取得する（.savファイル保存用）。
+     * バッテリバックアップ付きカートリッジでない場合はnullを返す。
+     */
+    fun getCartridgeRam(): ByteArray? {
+        val m = machine ?: return null
+        if (!m.hasBattery) return null
+        return m.getCartridgeRam()
+    }
+
+    /**
+     * カートリッジRAMにデータをロードする（.savファイル復元用）。
+     */
+    fun loadCartridgeRam(data: ByteArray) {
+        machine?.loadCartridgeRam(data)
+    }
+
     override fun saveState(): CoreResult<SaveState> {
         return CoreResult.error(
             CoreError.IllegalState(
