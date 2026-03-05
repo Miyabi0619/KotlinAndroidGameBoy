@@ -23,11 +23,11 @@ class Sound {
         // チャンネル別のレジスタ範囲
         const val SQUARE1_START = 0xFF10
         const val SQUARE1_END = 0xFF14
-        const val SQUARE2_START = 0xFF15
+        const val SQUARE2_START = 0xFF16
         const val SQUARE2_END = 0xFF19
         const val WAVE_START = 0xFF1A
         const val WAVE_END = 0xFF1E
-        const val NOISE_START = 0xFF1F
+        const val NOISE_START = 0xFF20
         const val NOISE_END = 0xFF23
         const val CONTROL_START = 0xFF24
         const val CONTROL_END = 0xFF26
@@ -52,6 +52,23 @@ class Sound {
         // 1サンプル = 524288 / 44100 ≈ 11.89 サウンドサイクル
         // 1フレームあたりのサンプル数 = 8778 / 11.89 ≈ 738.2
         const val SAMPLES_PER_FRAME = ((SAMPLE_RATE / FRAME_RATE) + 0.5).toInt()
+
+        // 各レジスタの読み取り時ORマスク（未使用ビットは1を返す）
+        // Pan Docs: https://gbdev.io/pandocs/Audio_Registers.html
+        // Index = offset from 0xFF10
+        // NR10,NR11,NR12,NR13,NR14, unused, NR21,NR22,NR23,NR24,
+        // NR30,NR31,NR32,NR33,NR34, unused, NR41,NR42,NR43,NR44, NR50,NR51
+        // NR52 (offset 0x16) is handled separately in readRegister
+        private val REGISTER_READ_MASKS =
+            intArrayOf(
+                0x80, 0x3F, 0x00, 0xFF, 0xBF,
+                0xFF,
+                0x3F, 0x00, 0xFF, 0xBF,
+                0x7F, 0xFF, 0x9F, 0xFF, 0xBF,
+                0xFF,
+                0xFF, 0x00, 0x00, 0xBF,
+                0x00, 0x00,
+            )
     }
 
     // サウンドレジスタ（0xFF10-0xFF3F）
@@ -154,8 +171,8 @@ class Sound {
 
         // NR52 (Sound Control) の読み取り時、各チャンネルの有効状態を反映
         if (offset == 0x16) {
-            val baseValue = soundRegs[offset]
-            var result = baseValue.toInt()
+            var result = 0x70 // bits 4-6 are always 1 on read
+            if ((soundRegs[0x16].toInt() and 0x80) != 0) result = result or 0x80
             if (square1State.enabled) result = result or 0x01
             if (square2State.enabled) result = result or 0x02
             if (waveState.enabled) result = result or 0x04
@@ -163,7 +180,9 @@ class Sound {
             return result.toUByte()
         }
 
-        return soundRegs[offset]
+        // 読み取り不可ビットは1を返す（実機仕様: Pan Docs準拠）
+        val readMask = REGISTER_READ_MASKS.getOrElse(offset) { 0xFF }
+        return (soundRegs[offset].toInt() or readMask).toUByte()
     }
 
     /**
@@ -311,11 +330,11 @@ class Sound {
                 }
             }
 
-            0x05 -> { // NR21 (Square 2 Length & Duty)
+            0x06 -> { // NR21 (Square 2 Length & Duty)
                 square2State.lengthCounter = 64 - (value.toInt() and 0x3F)
             }
 
-            0x06 -> { // NR22 (Square 2 Volume & Envelope)
+            0x07 -> { // NR22 (Square 2 Volume & Envelope)
                 square2State.envelopeVolume = (value.toInt() shr 4) and 0x0F
                 square2State.envelopePeriod = value.toInt() and 0x07
                 square2State.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
@@ -326,7 +345,7 @@ class Sound {
                 }
             }
 
-            0x08 -> { // NR24 (Square 2 Frequency High & Trigger)
+            0x09 -> { // NR24 (Square 2 Frequency High & Trigger)
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -336,7 +355,7 @@ class Sound {
                     }
 
                     // DAC無効化チェック: NR22の上位5ビットが全て0の場合、トリガーを無視（実機仕様）
-                    val nr22 = soundRegs[0x06]
+                    val nr22 = soundRegs[0x07]
                     if ((nr22.toInt() and 0xF8) == 0) {
                         return // DACが無効な場合、トリガーを無視
                     }
@@ -425,11 +444,11 @@ class Sound {
                 }
             }
 
-            0x11 -> { // NR41 (Noise Length)
+            0x10 -> { // NR41 (Noise Length)
                 noiseState.lengthCounter = 64 - (value.toInt() and 0x3F)
             }
 
-            0x12 -> { // NR42 (Noise Volume & Envelope)
+            0x11 -> { // NR42 (Noise Volume & Envelope)
                 noiseState.envelopeVolume = (value.toInt() shr 4) and 0x0F
                 noiseState.envelopePeriod = value.toInt() and 0x07
                 noiseState.envelopeDirection = if ((value.toInt() and 0x08) != 0) 1 else -1
@@ -440,11 +459,11 @@ class Sound {
                 }
             }
 
-            0x13 -> { // NR43 (Noise Polynomial)
+            0x12 -> { // NR43 (Noise Polynomial)
                 // LFSRの設定はサンプル生成時に使用
             }
 
-            0x14 -> { // NR44 (Noise Trigger)
+            0x13 -> { // NR44 (Noise Trigger)
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -454,7 +473,7 @@ class Sound {
                     }
 
                     // DAC無効化チェック: NR42の上位5ビットが全て0の場合、トリガーを無視（実機仕様）
-                    val nr42 = soundRegs[0x12]
+                    val nr42 = soundRegs[0x11]
                     if ((nr42.toInt() and 0xF8) == 0) {
                         return // DACが無効な場合、トリガーを無視
                     }
@@ -615,15 +634,15 @@ class Sound {
 
         // チャンネル出力マスクを事前に計算
         // 実機の仕様に基づく正しいビットマスク
-        // NR51: Bit 7-4 = SO2(右チャンネル), Bit 3-0 = SO1(左チャンネル)
-        val square1Right = (nr51Int and 0x10) != 0 // Bit 4: Square1 -> SO2(右)
-        val square1Left = (nr51Int and 0x01) != 0 // Bit 0: Square1 -> SO1(左)
-        val square2Right = (nr51Int and 0x20) != 0 // Bit 5: Square2 -> SO2(右)
-        val square2Left = (nr51Int and 0x02) != 0 // Bit 1: Square2 -> SO1(左)
-        val waveRight = (nr51Int and 0x40) != 0 // Bit 6: Wave -> SO2(右)
-        val waveLeft = (nr51Int and 0x04) != 0 // Bit 2: Wave -> SO1(左)
-        val noiseRight = (nr51Int and 0x80) != 0 // Bit 7: Noise -> SO2(右)
-        val noiseLeft = (nr51Int and 0x08) != 0 // Bit 3: Noise -> SO1(左)
+        // NR51: Bit 7-4 = SO2(左チャンネル), Bit 3-0 = SO1(右チャンネル)
+        val square1Left = (nr51Int and 0x10) != 0 // Bit 4: Square1 -> SO2(左)
+        val square1Right = (nr51Int and 0x01) != 0 // Bit 0: Square1 -> SO1(右)
+        val square2Left = (nr51Int and 0x20) != 0 // Bit 5: Square2 -> SO2(左)
+        val square2Right = (nr51Int and 0x02) != 0 // Bit 1: Square2 -> SO1(右)
+        val waveLeft = (nr51Int and 0x40) != 0 // Bit 6: Wave -> SO2(左)
+        val waveRight = (nr51Int and 0x04) != 0 // Bit 2: Wave -> SO1(右)
+        val noiseLeft = (nr51Int and 0x80) != 0 // Bit 7: Noise -> SO2(左)
+        val noiseRight = (nr51Int and 0x08) != 0 // Bit 3: Noise -> SO1(右)
 
         // 各チャンネルからサンプルを生成してミキシング
         // 最適化: ループ内の計算を削減、条件分岐を最適化
@@ -811,9 +830,9 @@ class Sound {
             return 0
         }
 
-        val nr21 = soundRegs[0x05] // NR21 (Length & Duty)
-        val nr23 = soundRegs[0x07] // NR23 (Frequency Low)
-        val nr24 = soundRegs[0x08] // NR24 (Frequency High & Trigger)
+        val nr21 = soundRegs[0x06] // NR21 (Length & Duty)
+        val nr23 = soundRegs[0x08] // NR23 (Frequency Low)
+        val nr24 = soundRegs[0x09] // NR24 (Frequency High & Trigger)
 
         // 周波数を計算
         val frequency = ((nr24.toInt() and 0x07) shl 8) or nr23.toInt()
@@ -1076,7 +1095,7 @@ class Sound {
             return
         }
 
-        val nr43 = soundRegs[0x13] // NR43 (Polynomial Counter)
+        val nr43 = soundRegs[0x12] // NR43 (Polynomial Counter)
 
         // 仕様: 周波数 = 524288 Hz / r / 2^(s+1)
         // r = 0 の場合は 0.5
@@ -1194,7 +1213,7 @@ class Sound {
      * @param soundCycle サウンドサイクル単位のタイミング（Double型で精度を保持）
      */
     private fun generateNoiseSample(soundCycle: Double): Int {
-        val nr43 = soundRegs[0x13] // NR43 (Polynomial Counter)
+        val nr43 = soundRegs[0x12] // NR43 (Polynomial Counter)
 
         if (!noiseState.enabled) {
             return 0
