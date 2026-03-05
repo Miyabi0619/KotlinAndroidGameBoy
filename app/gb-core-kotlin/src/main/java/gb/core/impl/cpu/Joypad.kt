@@ -47,18 +47,18 @@ class Joypad(
 
         // P14 (bit4) が 0 のとき方向キー
         if ((selectMask and 0x10) == 0) {
-            if (inputState.right) result = result and 0b1110
-            if (inputState.left) result = result and 0b1101
-            if (inputState.up) result = result and 0b1011
-            if (inputState.down) result = result and 0b0111
+            if (inputState.right) result = result and 0xFE // bit0 を 0 に
+            if (inputState.left) result = result and 0xFD // bit1 を 0 に
+            if (inputState.up) result = result and 0xFB // bit2 を 0 に
+            if (inputState.down) result = result and 0xF7 // bit3 を 0 に
         }
 
         // P15 (bit5) が 0 のときボタン
         if ((selectMask and 0x20) == 0) {
-            if (inputState.a) result = result and 0b1110
-            if (inputState.b) result = result and 0b1101
-            if (inputState.select) result = result and 0b1011
-            if (inputState.start) result = result and 0b0111
+            if (inputState.a) result = result and 0xFE // bit0 を 0 に（A/Right）
+            if (inputState.b) result = result and 0xFD // bit1 を 0 に（B/Left）
+            if (inputState.select) result = result and 0xFB // bit2 を 0 に（Select/Up）
+            if (inputState.start) result = result and 0xF7 // bit3 を 0 に（Start/Down）
         }
 
         return result.toUByte()
