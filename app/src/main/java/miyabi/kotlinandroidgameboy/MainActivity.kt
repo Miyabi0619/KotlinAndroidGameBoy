@@ -16,7 +16,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,28 +72,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onKeyDown(
-        keyCode: Int,
-        event: KeyEvent?,
-    ): Boolean {
-        val handled = InputStateHolder.updateFromKey(keyCode, isDown = true)
-        return if (handled) {
-            true
-        } else {
-            super.onKeyDown(keyCode, event)
-        }
-    }
-
-    override fun onKeyUp(
-        keyCode: Int,
-        event: KeyEvent?,
-    ): Boolean {
-        val handled = InputStateHolder.updateFromKey(keyCode, isDown = false)
-        return if (handled) {
-            true
-        } else {
-            super.onKeyUp(keyCode, event)
-        }
+    // dispatchKeyEvent を使うことで、Compose のフォーカスナビゲーション処理より前に
+    // キーイベントを消費できる（onKeyDown/onKeyUp は Compose 処理後に呼ばれるため不十分）
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val isDown = event.action == KeyEvent.ACTION_DOWN
+        val isUp = event.action == KeyEvent.ACTION_UP
+        if (!isDown && !isUp) return super.dispatchKeyEvent(event)
+        val handled = InputStateHolder.updateFromKey(event.keyCode, isDown = isDown)
+        return if (handled) true else super.dispatchKeyEvent(event)
     }
 }
 
@@ -431,13 +419,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(up = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(up = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(up = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(up = false) }
+                            }
                         },
             ) {
                 Text("↑")
@@ -449,13 +436,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(left = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(left = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(left = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(left = false) }
+                            }
                         },
             ) {
                 Text("←")
@@ -465,13 +451,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(down = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(down = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(down = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(down = false) }
+                            }
                         },
             ) {
                 Text("↓")
@@ -481,13 +466,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(right = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(right = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(right = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(right = false) }
+                            }
                         },
             ) {
                 Text("→")
@@ -504,13 +488,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(a = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(a = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(a = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(a = false) }
+                            }
                         },
             ) {
                 Text("A")
@@ -520,13 +503,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(b = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(b = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(b = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(b = false) }
+                            }
                         },
             ) {
                 Text("B")
@@ -536,13 +518,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(select = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(select = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(select = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(select = false) }
+                            }
                         },
             ) {
                 Text("SELECT")
@@ -552,13 +533,12 @@ private fun inputButtons(
                 modifier =
                     Modifier
                         .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    setButton(true) { state, pressed -> state.copy(start = pressed) }
-                                    tryAwaitRelease()
-                                    setButton(false) { state, pressed -> state.copy(start = pressed) }
-                                },
-                            )
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setButton(true) { state, pressed -> state.copy(start = pressed) }
+                                waitForUpOrCancellation()
+                                setButton(false) { state, _ -> state.copy(start = false) }
+                            }
                         },
             ) {
                 Text("START")
