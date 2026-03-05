@@ -472,8 +472,9 @@ class Sound {
                     noiseState.envelopeCounter = if (envelopePeriod == 0) 8 else envelopePeriod
                     // LFSRの初期化（Trigger時にリセット）
                     noiseState.lfsr = 0x7FFF
-                    noiseState.lfsrCounter = 0
                     noiseState.lfsrHalfCycleAccumulator = 0L
+                    // LFSR位置同期: トリガー時の絶対半サウンドサイクルを記録
+                    noiseState.lfsrSampleHalfCycles = halfSoundCycleCounter
                     // 長さカウンタが0の場合、最大値（64）にリセット
                     if (noiseState.lengthCounter == 0) {
                         noiseState.lengthCounter = 64
@@ -518,9 +519,7 @@ class Sound {
             advanceFrameSequencerStep()
         }
         lastDivBit12 = currentDivBit12
-
-        // Noise の LFSR は周波数に従って常時更新する（フレームシーケンサとは独立）
-        advanceNoiseLfsr(halfSoundCycles)
+        // Noise の LFSR はサンプル生成時（generateNoiseSample）にサンプル単位で更新する
     }
 
     /**
@@ -915,8 +914,10 @@ class Sound {
         var envelopeCounter = 0
         var envelopeDirection = 1
         var lfsr = 0x7FFF // Linear Feedback Shift Register
-        var lfsrCounter = 0 // LFSR更新用カウンタ（整数）
-        var lfsrHalfCycleAccumulator = 0L // LFSR更新用カウンタ（半サウンドサイクル単位、整数）
+        var lfsrHalfCycleAccumulator = 0L // LFSR周期内の半サウンドサイクル累積器
+
+        // サンプル生成時のLFSR位置同期用：最後にLFSRを進めた絶対半サウンドサイクル
+        var lfsrSampleHalfCycles: Long = 0L
     }
 
     /**
@@ -967,7 +968,7 @@ class Sound {
             return
         }
 
-        val nr22 = soundRegs[0x06]
+        val nr22 = soundRegs[0x07] // NR22 (Square 2 Volume & Envelope)
         val envelopePeriod = nr22.toInt() and 0x07
 
         if (envelopePeriod == 0) {
@@ -1068,62 +1069,6 @@ class Sound {
     }
 
     /**
-     * Noise の LFSR を周波数に従って進める（フレームシーケンサとは独立）。
-     */
-    private fun advanceNoiseLfsr(halfSoundCycles: Int) {
-        if (!noiseState.enabled) {
-            return
-        }
-
-        val nr43 = soundRegs[0x12] // NR43 (Polynomial Counter)
-
-        // 仕様: 周波数 = 524288 Hz / r / 2^(s+1)
-        // r = 0 の場合は 0.5
-        val r = nr43.toInt() and 0x07
-        val s = (nr43.toInt() shr 4) and 0x0F
-
-        // 半サウンドサイクル単位の周期
-        // Pan Docs: Period = divisor * 2^s T-cycles
-        //   r=0: divisor=8  → 8*2^s T-cycles = 2*2^s sound cycles = 2^(s+1) half sound cycles
-        //   r>0: divisor=r*16 → r*16*2^s T-cycles = r*4*2^s sound cycles = r*2^(s+2) half sound cycles
-        val periodHalfCycles =
-            if (s < 16) {
-                if (r == 0) {
-                    1L shl (s + 1)
-                } else {
-                    r.toLong() shl (s + 2)
-                }
-            } else {
-                0L
-            }
-
-        if (periodHalfCycles <= 0) {
-            return
-        }
-
-        noiseState.lfsrHalfCycleAccumulator += halfSoundCycles
-
-        while (noiseState.lfsrHalfCycleAccumulator >= periodHalfCycles) {
-            noiseState.lfsrHalfCycleAccumulator -= periodHalfCycles
-
-            // XOR = bit 0 XOR bit 1
-            val xor = (noiseState.lfsr xor (noiseState.lfsr shr 1)) and 1
-            noiseState.lfsr = (noiseState.lfsr shr 1) and 0x7FFF
-            if (xor != 0) {
-                noiseState.lfsr = noiseState.lfsr or 0x4000
-            }
-
-            // 7bitモード: bit6 へフィードバックをコピー
-            if ((nr43.toInt() and 0x08) != 0) {
-                val bit0 = noiseState.lfsr and 0x01
-                noiseState.lfsr = (noiseState.lfsr and 0x7FBF) or (bit0 shl 6)
-            }
-        }
-
-        noiseState.lfsrCounter = (noiseState.lfsrHalfCycleAccumulator / 2).toInt()
-    }
-
-    /**
      * Waveチャンネルのサンプルを生成する。
      *
      * @param soundCycle サウンドサイクル単位のタイミング（Double型で精度を保持）
@@ -1193,55 +1138,68 @@ class Sound {
     /**
      * Noiseチャンネルのサンプルを生成する。
      *
-     * @param soundCycle サウンドサイクル単位のタイミング（Double型で精度を保持）
+     * 実機仕様: LFSR は独立した周波数で常時更新される。
+     * 各サンプルのタイミング（soundCycle）に対応した LFSR 状態を使うため、
+     * このメソッド内でサンプルごとに LFSR を進める。
+     *
+     * @param soundCycle サウンドサイクル単位の絶対タイミング（Double型）
      */
     private fun generateNoiseSample(soundCycle: Double): Int {
-        val nr43 = soundRegs[0x12] // NR43 (Polynomial Counter)
-
         if (!noiseState.enabled) {
             return 0
         }
 
-        // エンベロープボリュームをチェック
         val volume = noiseState.envelopeVolume
         if (volume == 0) {
             return 0
         }
 
-        // 周波数を計算
-        // 仕様書: 周波数 = 524288 Hz / r / 2^(s+1)
-        // r = 0の場合、r = 0.5が代わりに使われる
-        // 周期 = r * 2^(s+1) / 524288 秒
-        // サウンドサイクル単位: r * 2^(s+1) * 8
+        val nr43 = soundRegs[0x12] // NR43 (Polynomial Counter)
         val r = nr43.toInt() and 0x07
         val s = (nr43.toInt() shr 4) and 0x0F
-        // 周期をDouble型で計算（精度向上）
-        val period =
+
+        // Pan Docs: 半サウンドサイクル単位の LFSR 周期
+        //   r=0: 2^(s+1) 半サウンドサイクル
+        //   r>0: r * 2^(s+2) 半サウンドサイクル
+        val periodHalfCycles: Long =
             if (s < 16) {
-                if (r == 0) {
-                    // r = 0の場合、r = 0.5が代わりに使われる
-                    // 周期 = 0.5 * 2^(s+1) * 8 = 2^s * 8
-                    (1 shl s) * 8.0
-                } else {
-                    // r != 0の場合、周期 = r * 2^(s+1) * 8
-                    r * (1 shl (s + 1)) * 8.0
-                }
+                if (r == 0) 1L shl (s + 1) else r.toLong() shl (s + 2)
             } else {
-                0.0
+                0L
             }
 
-        if (period <= 0) {
+        if (periodHalfCycles <= 0) {
             return 0
         }
 
-        // LFSRはupdateNoiseChannelで更新されているため、現在の値をそのまま使用
-        // ノイズ値を取得（LFSRの最下位ビット）
-        // 実機では、LFSRの最下位ビットが0の場合は-1、1の場合は+1を出力
-        val noiseValue = if ((noiseState.lfsr and 1) != 0) 1 else -1
+        // このサンプルの絶対タイミング（半サウンドサイクル単位）
+        val currentHalfCycles = (soundCycle * 2.0).toLong()
+        val elapsedHalfCycles = currentHalfCycles - noiseState.lfsrSampleHalfCycles
 
-        // ボリュームを適用（0-15を0-32767にスケール）
-        // 実機では、ボリュームは0-15で、出力は noiseValue * volume で計算される
-        // 整数演算で計算（丸め誤差を防ぐ）
+        // 前回のサンプルから経過した分だけ LFSR を進める
+        if (elapsedHalfCycles > 0) {
+            var acc = noiseState.lfsrHalfCycleAccumulator + elapsedHalfCycles
+            while (acc >= periodHalfCycles) {
+                acc -= periodHalfCycles
+                // XOR = bit0 XOR bit1
+                val xor = (noiseState.lfsr xor (noiseState.lfsr shr 1)) and 1
+                noiseState.lfsr = (noiseState.lfsr shr 1) and 0x7FFF
+                if (xor != 0) {
+                    noiseState.lfsr = noiseState.lfsr or 0x4000
+                }
+                // 7bitモード: bit6 へフィードバックをコピー
+                if ((nr43.toInt() and 0x08) != 0) {
+                    val bit14 = (noiseState.lfsr shr 14) and 1
+                    noiseState.lfsr = (noiseState.lfsr and 0x7FBF) or (bit14 shl 6)
+                }
+            }
+            noiseState.lfsrHalfCycleAccumulator = acc
+            noiseState.lfsrSampleHalfCycles = currentHalfCycles
+        }
+
+        // LFSR bit0 が出力: 0 → +1, 1 → -1（実機仕様）
+        val noiseValue = if ((noiseState.lfsr and 1) == 0) 1 else -1
+
         // スケール係数: 32767 / 15 / 4 = 546（4チャンネルミキシングのヘッドルーム確保）
         return (noiseValue * volume * 546).coerceIn(-32768, 32767)
     }
