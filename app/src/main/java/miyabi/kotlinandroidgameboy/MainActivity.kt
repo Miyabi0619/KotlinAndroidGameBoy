@@ -149,6 +149,25 @@ private fun gameScreen(
             },
         )
 
+    // SAV ファイル選択ランチャ
+    val savPickerLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocument(),
+            onResult = { uri ->
+                if (uri == null) return@rememberLauncherForActivityResult
+                val savBytes =
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (savBytes == null) {
+                    android.util.Log.e("SaveData", "Failed to read SAV file")
+                    errorMessage = "SAV ファイルを読み込めませんでした。"
+                    return@rememberLauncherForActivityResult
+                }
+                gameLoop.loadCartridgeRam(savBytes)
+                android.util.Log.d("SaveData", "SAV loaded: ${savBytes.size} bytes")
+                errorMessage = null
+            },
+        )
+
     // オーディオ出力の初期化（ステレオ形式）
     val audioTrack =
         remember {
@@ -323,6 +342,14 @@ private fun gameScreen(
                     },
                 ) {
                     Text("ROM を選択")
+                }
+                Button(
+                    onClick = {
+                        savPickerLauncher.launch(arrayOf("*/*"))
+                    },
+                    enabled = romLoaded,
+                ) {
+                    Text("SAV を読み込む")
                 }
                 Button(
                     onClick = {
