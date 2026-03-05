@@ -181,6 +181,7 @@ class Sound {
         }
 
         // 読み取り不可ビットは1を返す（実機仕様: Pan Docs準拠）
+        // オフセット → ORマスク
         val readMask = REGISTER_READ_MASKS.getOrElse(offset) { 0xFF }
         return (soundRegs[offset].toInt() or readMask).toUByte()
     }
@@ -224,16 +225,11 @@ class Sound {
 
         // 読み取り専用ビットの処理
         when (offset) {
-            0x04, // NR14 (Square 1)
-            0x09, // NR24 (Square 2)
-            0x0E, // NR34 (Wave)
-            0x13, // NR44 (Noise)
-            -> {
-                // これらのレジスタの bit 6-7 は読み取り専用
-                val currentValue = soundRegs[offset]
-                val newValue = (value and 0x3Fu.toUByte()) or (currentValue and 0xC0u.toUByte())
-                soundRegs[offset] = newValue
-            }
+            // NRx4レジスタ（NR14/NR24/NR34/NR44）は全ビット書き込み可能
+            // bit 7 = trigger（書き込み専用、読み取り時は常に1）
+            // bit 6 = length enable（読み書き可能）
+            // bit 0-2 = frequency high / NR44では未使用
+            // 読み取り時のマスクはREGISTER_READ_MASKSで処理する
 
             0x16, // NR52 (Sound Control)
             -> {
@@ -283,6 +279,8 @@ class Sound {
             }
 
             0x04 -> { // NR14 (Square 1 Frequency High & Trigger)
+                // Length enableはトリガーに関係なく常に更新（実機仕様）
+                square1State.lengthEnabled = (value.toInt() and 0x40) != 0
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -304,18 +302,12 @@ class Sound {
                     // エンベロープカウンタをピリオド値で初期化（実機仕様）
                     val envelopePeriod = nr12.toInt() and 0x07
                     square1State.envelopeCounter = if (envelopePeriod == 0) 8 else envelopePeriod
-                    // 長さカウンタの初期化（Length Enableが有効な場合）
-                    if ((value.toInt() and 0x40) != 0) {
-                        square1State.lengthEnabled = true
-                        // 長さカウンタが0の場合、最大値（64）にリセット
-                        if (square1State.lengthCounter == 0) {
-                            square1State.lengthCounter = 64
-                        }
-                        // 長さカウンタの累積器をリセット
-                        square1State.lengthCounterAccumulator = 0
-                    } else {
-                        square1State.lengthEnabled = false
+                    // 長さカウンタが0の場合、最大値（64）にリセット
+                    if (square1State.lengthCounter == 0) {
+                        square1State.lengthCounter = 64
                     }
+                    // 長さカウンタの累積器をリセット
+                    square1State.lengthCounterAccumulator = 0
                     // スイープの初期化
                     val nr10 = soundRegs[0x00]
                     sweepPeriod = ((nr10.toInt() shr 4) and 0x07)
@@ -346,6 +338,8 @@ class Sound {
             }
 
             0x09 -> { // NR24 (Square 2 Frequency High & Trigger)
+                // Length enableはトリガーに関係なく常に更新（実機仕様）
+                square2State.lengthEnabled = (value.toInt() and 0x40) != 0
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -366,18 +360,12 @@ class Sound {
                     // エンベロープカウンタをピリオド値で初期化（実機仕様）
                     val envelopePeriod = nr22.toInt() and 0x07
                     square2State.envelopeCounter = if (envelopePeriod == 0) 8 else envelopePeriod
-                    // 長さカウンタの初期化（Length Enableが有効な場合）
-                    if ((value.toInt() and 0x40) != 0) {
-                        square2State.lengthEnabled = true
-                        // 長さカウンタが0の場合、最大値（64）にリセット
-                        if (square2State.lengthCounter == 0) {
-                            square2State.lengthCounter = 64
-                        }
-                        // 長さカウンタの累積器をリセット
-                        square2State.lengthCounterAccumulator = 0
-                    } else {
-                        square2State.lengthEnabled = false
+                    // 長さカウンタが0の場合、最大値（64）にリセット
+                    if (square2State.lengthCounter == 0) {
+                        square2State.lengthCounter = 64
                     }
+                    // 長さカウンタの累積器をリセット
+                    square2State.lengthCounterAccumulator = 0
                 }
             }
 
@@ -414,6 +402,8 @@ class Sound {
             }
 
             0x0E -> { // NR34 (Wave Frequency High & Trigger)
+                // Length enableはトリガーに関係なく常に更新（実機仕様）
+                waveState.lengthEnabled = (value.toInt() and 0x40) != 0
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -428,18 +418,12 @@ class Sound {
                     if (waveEnabled) {
                         waveState.enabled = true
                         waveState.position = 0
-                        // 長さカウンタの初期化（Length Enableが有効な場合）
-                        if ((value.toInt() and 0x40) != 0) {
-                            waveState.lengthEnabled = true
-                            // 長さカウンタが0の場合、最大値（256）にリセット
-                            if (waveState.lengthCounter == 0) {
-                                waveState.lengthCounter = 256
-                            }
-                            // 長さカウンタの累積器をリセット
-                            waveState.lengthCounterAccumulator = 0
-                        } else {
-                            waveState.lengthEnabled = false
+                        // 長さカウンタが0の場合、最大値（256）にリセット
+                        if (waveState.lengthCounter == 0) {
+                            waveState.lengthCounter = 256
                         }
+                        // 長さカウンタの累積器をリセット
+                        waveState.lengthCounterAccumulator = 0
                     }
                 }
             }
@@ -464,6 +448,8 @@ class Sound {
             }
 
             0x13 -> { // NR44 (Noise Trigger)
+                // Length enableはトリガーに関係なく常に更新（実機仕様）
+                noiseState.lengthEnabled = (value.toInt() and 0x40) != 0
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -488,18 +474,12 @@ class Sound {
                     noiseState.lfsr = 0x7FFF
                     noiseState.lfsrCounter = 0
                     noiseState.lfsrHalfCycleAccumulator = 0L
-                    // 長さカウンタの初期化（Length Enableが有効な場合）
-                    if ((value.toInt() and 0x40) != 0) {
-                        noiseState.lengthEnabled = true
-                        // 長さカウンタが0の場合、最大値（64）にリセット
-                        if (noiseState.lengthCounter == 0) {
-                            noiseState.lengthCounter = 64
-                        }
-                        // 長さカウンタの累積器をリセット
-                        noiseState.lengthCounterAccumulator = 0
-                    } else {
-                        noiseState.lengthEnabled = false
+                    // 長さカウンタが0の場合、最大値（64）にリセット
+                    if (noiseState.lengthCounter == 0) {
+                        noiseState.lengthCounter = 64
                     }
+                    // 長さカウンタの累積器をリセット
+                    noiseState.lengthCounterAccumulator = 0
                 }
             }
 
@@ -1102,13 +1082,16 @@ class Sound {
         val r = nr43.toInt() and 0x07
         val s = (nr43.toInt() shr 4) and 0x0F
 
-        // 半サウンドサイクル単位の周期（元のサウンドサイクル周期 * 2）
+        // 半サウンドサイクル単位の周期
+        // Pan Docs: Period = divisor * 2^s T-cycles
+        //   r=0: divisor=8  → 8*2^s T-cycles = 2*2^s sound cycles = 2^(s+1) half sound cycles
+        //   r>0: divisor=r*16 → r*16*2^s T-cycles = r*4*2^s sound cycles = r*2^(s+2) half sound cycles
         val periodHalfCycles =
             if (s < 16) {
                 if (r == 0) {
-                    (1L shl s) * 16L
+                    1L shl (s + 1)
                 } else {
-                    r.toLong() * (1L shl (s + 1)) * 16L
+                    r.toLong() shl (s + 2)
                 }
             } else {
                 0L
