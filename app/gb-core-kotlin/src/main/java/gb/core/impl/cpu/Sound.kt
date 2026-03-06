@@ -305,6 +305,8 @@ class Sound {
                     }
                     // 長さカウンタの累積器をリセット
                     square1State.lengthCounterAccumulator = 0
+                    // 位相をリセット（Trigger時は波形の先頭から再生）
+                    square1State.phaseAccumulator = 0.0
                     // スイープの初期化
                     val nr10 = soundRegs[0x00]
                     sweepPeriod = ((nr10.toInt() shr 4) and 0x07)
@@ -363,6 +365,8 @@ class Sound {
                     }
                     // 長さカウンタの累積器をリセット
                     square2State.lengthCounterAccumulator = 0
+                    // 位相をリセット（Trigger時は波形の先頭から再生）
+                    square2State.phaseAccumulator = 0.0
                 }
             }
 
@@ -415,6 +419,7 @@ class Sound {
                     if (waveEnabled) {
                         waveState.enabled = true
                         waveState.position = 0
+                        waveState.phaseAccumulator = 0.0
                         // 長さカウンタが0の場合、最大値（256）にリセット
                         if (waveState.lengthCounter == 0) {
                             waveState.lengthCounter = 256
@@ -635,23 +640,22 @@ class Sound {
             var rightMixed: Long = 0
 
             // Square 1チャンネル
-            // 最適化: 条件分岐を削減
             if (square1Enabled) {
-                val square1Sample = generateSquare1Sample(sampleSoundCycle)
+                val square1Sample = generateSquare1Sample(soundCyclesPerSample)
                 if (square1Left) leftMixed += square1Sample
                 if (square1Right) rightMixed += square1Sample
             }
 
             // Square 2チャンネル
             if (square2Enabled) {
-                val square2Sample = generateSquare2Sample(sampleSoundCycle)
+                val square2Sample = generateSquare2Sample(soundCyclesPerSample)
                 if (square2Left) leftMixed += square2Sample
                 if (square2Right) rightMixed += square2Sample
             }
 
             // Waveチャンネル
             if (waveEnabled) {
-                val waveSample = generateWaveSample(sampleSoundCycle)
+                val waveSample = generateWaveSample(soundCyclesPerSample)
                 if (waveLeft) leftMixed += waveSample
                 if (waveRight) rightMixed += waveSample
             }
@@ -701,9 +705,9 @@ class Sound {
     /**
      * Square 1チャンネルのサンプルを生成する。
      *
-     * @param soundCycle サウンドサイクル単位のタイミング（Double型で精度を保持）
+     * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
      */
-    private fun generateSquare1Sample(soundCycle: Double): Int {
+    private fun generateSquare1Sample(soundCyclesPerSample: Double): Int {
         // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
         if (!square1State.enabled) {
             return 0
@@ -770,35 +774,24 @@ class Sound {
             return 0
         }
 
-        // 波形を生成（矩形波）
-        // 周期内の位置を0-7の範囲に正規化
-        // ノイズを防ぐため、整数演算ベースで計算
-        val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
-        // デューティ比の位置を計算（0-7の範囲）
-        // 精度を保つため、8を掛けてから周期で割る
-        val dutyPosition =
-            if (period > 0) {
-                ((positionInPeriod * 8.0 / period).toInt() and 0x07)
-            } else {
-                0
-            }
-        // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
-        // 実機では、dutyPositionは0-7の範囲で、dutyPatternの対応するビットをチェック
+        // 位相を進める（周波数変化時も位相が連続するよう差分加算）
+        square1State.phaseAccumulator += soundCyclesPerSample
+        if (square1State.phaseAccumulator >= period) {
+            square1State.phaseAccumulator -= period
+            if (square1State.phaseAccumulator < 0.0) square1State.phaseAccumulator = 0.0
+        }
+        val dutyPosition = ((square1State.phaseAccumulator * 8.0 / period).toInt() and 0x07)
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
 
-        // ボリュームを適用（0-15を0-32767にスケール）
-        // 実機では、ボリュームは0-15で、出力は waveValue * volume で計算される
-        // 16bit範囲にスケールするため、整数演算で計算（丸め誤差を防ぐ）
-        // スケール係数: 32767 / 15 / 4 = 546（4チャンネルミキシングのヘッドルーム確保）
         return (waveValue * volume * 546).coerceIn(-32768, 32767)
     }
 
     /**
      * Square 2チャンネルのサンプルを生成する（Square 1と同様）。
      *
-     * @param soundCycle サウンドサイクル単位のタイミング（Double型で精度を保持）
+     * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
      */
-    private fun generateSquare2Sample(soundCycle: Double): Int {
+    private fun generateSquare2Sample(soundCyclesPerSample: Double): Int {
         // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
         if (!square2State.enabled) {
             return 0
@@ -850,23 +843,15 @@ class Sound {
             return 0
         }
 
-        // 波形を生成
-        // 周期内の位置を計算
-        val positionInPeriod = if (period > 0) (soundCycle % period) else 0.0
-        // デューティ比の位置を計算（0-7の範囲）
-        // ノイズを防ぐため、ビットマスクで範囲を制限
-        val dutyPosition =
-            if (period > 0) {
-                ((positionInPeriod * 8.0 / period).toInt() and 0x07)
-            } else {
-                0
-            }
-        // デューティパターンのビットをチェック（ノイズを防ぐため、正確に計算）
+        // 位相を進める（周波数変化時も位相が連続するよう差分加算）
+        square2State.phaseAccumulator += soundCyclesPerSample
+        if (square2State.phaseAccumulator >= period) {
+            square2State.phaseAccumulator -= period
+            if (square2State.phaseAccumulator < 0.0) square2State.phaseAccumulator = 0.0
+        }
+        val dutyPosition = ((square2State.phaseAccumulator * 8.0 / period).toInt() and 0x07)
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
 
-        // ボリュームを適用（0-15を0-32767にスケール）
-        // 整数演算で計算（丸め誤差を防ぐ）
-        // スケール係数: 32767 / 15 / 4 = 546（4チャンネルミキシングのヘッドルーム確保）
         return (waveValue * volume * 546).coerceIn(-32768, 32767)
     }
 
@@ -882,6 +867,7 @@ class Sound {
         var envelopePeriod = 0
         var envelopeCounter = 0
         var envelopeDirection = 1 // 1 = 増加, -1 = 減少
+        var phaseAccumulator: Double = 0.0 // 位相アキュムレータ（0 to period）。周波数変化時も位相連続
     }
 
     /**
@@ -894,6 +880,7 @@ class Sound {
         var lengthCounterAccumulator = 0 // 長さカウンタ更新用の累積器（256Hz = 2048サウンドサイクルごと）
         var volumeShift = 0
         var position = 0
+        var phaseAccumulator: Double = 0.0 // 位相アキュムレータ（0 to period）。周波数変化時も位相連続
     }
 
     /**
@@ -1055,9 +1042,9 @@ class Sound {
     /**
      * Waveチャンネルのサンプルを生成する。
      *
-     * @param soundCycle サウンドサイクル単位のタイミング（Double型で精度を保持）
+     * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
      */
-    private fun generateWaveSample(soundCycle: Double): Int {
+    private fun generateWaveSample(soundCyclesPerSample: Double): Int {
         // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
         if (!waveState.enabled) {
             return 0
@@ -1084,17 +1071,14 @@ class Sound {
             return 0
         }
 
-        // 波形位置を計算（32サンプルの波形）
-        // 周期内の位置を計算
-        val position = if (period > 0) (soundCycle % period) else 0.0
+        // 位相を進める（周波数変化時も位相が連続するよう差分加算）
+        waveState.phaseAccumulator += soundCyclesPerSample
+        if (waveState.phaseAccumulator >= period) {
+            waveState.phaseAccumulator -= period
+            if (waveState.phaseAccumulator < 0.0) waveState.phaseAccumulator = 0.0
+        }
         // 32サンプルの波形なので、位置を0-31の範囲に正規化
-        // ノイズを防ぐため、ビットマスクで範囲を制限
-        val sampleIndex =
-            if (period > 0) {
-                ((position * 32.0 / period).toInt() and 0x1F)
-            } else {
-                0
-            }
+        val sampleIndex = ((waveState.phaseAccumulator * 32.0 / period).toInt() and 0x1F)
 
         // 波形RAMからサンプルを読み取り（16バイト = 32サンプル）
         val byteIndex = (sampleIndex / 2).coerceIn(0, 15)
