@@ -109,9 +109,16 @@ class Machine(
     init {
         // カートリッジタイプからバッテリバックアップの有無を判定
         val cartridgeType = rom.getOrNull(0x0147)?.toInt() ?: 0
-        hasBattery = cartridgeType == 0x03 // MBC1+RAM+BATTERY
+        hasBattery =
+            when (cartridgeType) {
+                0x03, // MBC1+RAM+BATTERY
+                0x10, // MBC3+TIMER+RAM+BATTERY
+                0x13, // MBC3+RAM+BATTERY
+                -> true
+                else -> false
+            }
 
-        val (mbc1, cartridgeRam) = createMbc1AndRamIfNeeded(rom)
+        val (mbc1, mbc3, cartridgeRam) = createMbcAndRamIfNeeded(rom)
         val vram = UByteArray(0x2000) { 0u }
         val oam = UByteArray(0xA0) { 0u }
         ppu = Ppu(vram, oam, interruptController)
@@ -124,6 +131,7 @@ class Machine(
                 interruptController = interruptController,
                 timer = timer,
                 mbc1 = mbc1,
+                mbc3 = mbc3,
                 joypad = joypad,
                 ppu = ppu,
                 sound = sound,
@@ -141,26 +149,28 @@ class Machine(
         cpu.registers.hl = 0x014Du.toUShort()
     }
 
-    private fun createMbc1AndRamIfNeeded(rom: UByteArray): Pair<Mbc1?, UByteArray?> {
+    private fun createMbcAndRamIfNeeded(rom: UByteArray): Triple<Mbc1?, Mbc3?, UByteArray?> {
         if (rom.isEmpty()) {
-            return null to null
+            return Triple(null, null, null)
         }
 
         val cartridgeType = rom.getOrNull(0x0147)?.toInt() ?: 0
         val hasMbc1 =
             when (cartridgeType) {
-                0x01, // MBC1
-                0x02, // MBC1+RAM
-                0x03, // MBC1+RAM+BATTERY
-                -> true
+                0x01, 0x02, 0x03 -> true
+                else -> false
+            }
+        val hasMbc3 =
+            when (cartridgeType) {
+                0x0F, 0x10, 0x11, 0x12, 0x13 -> true
                 else -> false
             }
 
         val ramSizeCode = rom.getOrNull(0x0149)?.toInt() ?: 0
         val ramSizeBytes =
             when (ramSizeCode) {
-                0x00 -> 0 // no RAM
-                0x01 -> 0x800 // 2KB
+                0x00 -> 0
+                0x01 -> 0x800  // 2KB
                 0x02 -> 0x2000 // 8KB
                 0x03 -> 0x8000 // 32KB (4 banks)
                 0x04 -> 0x20000 // 128KB
@@ -168,20 +178,12 @@ class Machine(
                 else -> 0
             }
 
-        val cartridgeRam =
-            if (ramSizeBytes > 0 && hasMbc1) {
-                UByteArray(ramSizeBytes) { 0u }
-            } else {
-                null
-            }
+        val needsRam = (hasMbc1 || hasMbc3) && ramSizeBytes > 0
+        val cartridgeRam = if (needsRam) UByteArray(ramSizeBytes) { 0u } else null
 
-        val mbc1 =
-            if (hasMbc1) {
-                Mbc1(romSize = rom.size, ramSize = ramSizeBytes)
-            } else {
-                null
-            }
+        val mbc1 = if (hasMbc1) Mbc1(romSize = rom.size, ramSize = ramSizeBytes) else null
+        val mbc3 = if (hasMbc3) Mbc3(romSize = rom.size, ramSize = ramSizeBytes) else null
 
-        return mbc1 to cartridgeRam
+        return Triple(mbc1, mbc3, cartridgeRam)
     }
 }

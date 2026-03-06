@@ -40,6 +40,8 @@ class SystemBus(
      * それ以外のカートリッジでは null（ノーマッパ）とする。
      */
     private val mbc1: Mbc1? = null,
+    /** ROM が MBC3 カートリッジであれば Mbc3 インスタンスを渡す。 */
+    private val mbc3: Mbc3? = null,
 ) : Bus {
     /** Joypad 入力レジスタ（FF00）は [joypad] に委譲する。 */
     private val joypad: Joypad = joypad
@@ -87,11 +89,11 @@ class SystemBus(
     private fun readByteInternal(addr: Int): UByte =
         when {
             addr in 0x0000..0x3FFF -> {
-                val index = mbc1?.mapRom0(addr) ?: addr
+                val index = mbc1?.mapRom0(addr) ?: mbc3?.mapRom0(addr) ?: addr
                 rom.getOrElse(index) { 0xFFu }
             }
             addr in 0x4000..0x7FFF -> {
-                val index = mbc1?.mapRomX(addr) ?: addr
+                val index = mbc1?.mapRomX(addr) ?: mbc3?.mapRomX(addr) ?: addr
                 rom.getOrElse(index) { 0xFFu }
             }
             addr in 0x8000..0x9FFF ->
@@ -101,12 +103,12 @@ class SystemBus(
                     0xFFu
                 }
             addr in 0xA000..0xBFFF -> {
-                val ram = cartridgeRam ?: return 0xFFu
-                val ramIndex = mbc1?.mapRam(addr) ?: (addr - 0xA000)
-                if (ramIndex !in 0 until ram.size) {
-                    0xFFu
+                if (mbc3?.isRtcAccess() == true) {
+                    mbc3.readRtc()
                 } else {
-                    ram[ramIndex]
+                    val ram = cartridgeRam ?: return 0xFFu
+                    val ramIndex = mbc1?.mapRam(addr) ?: mbc3?.mapRam(addr) ?: (addr - 0xA000)
+                    if (ramIndex == null || ramIndex !in 0 until ram.size) 0xFFu else ram[ramIndex]
                 }
             }
             addr in 0xC000..0xDFFF -> wram[addr - 0xC000]
@@ -168,6 +170,7 @@ class SystemBus(
             in 0x0000..0x7FFF -> {
                 // MBC 制御レジスタ
                 mbc1?.writeControl(addr, value)
+                mbc3?.writeControl(addr, value)
             }
             in 0x8000..0x9FFF -> {
                 // Mode 3（Pixel Transfer）中は VRAM への CPU アクセスは無視される
@@ -177,15 +180,14 @@ class SystemBus(
                 }
             }
             in 0xA000..0xBFFF -> {
-                val ram = cartridgeRam ?: return
-                val ramIndex =
-                    mbc1
-                        ?.mapRam(addr)
-                        ?: (addr - 0xA000)
-                if (ramIndex !in 0 until ram.size) {
-                    return
+                if (mbc3?.isRtcAccess() == true) {
+                    mbc3.writeRtc(value)
+                } else {
+                    val ram = cartridgeRam ?: return
+                    val ramIndex = mbc1?.mapRam(addr) ?: mbc3?.mapRam(addr) ?: (addr - 0xA000)
+                    if (ramIndex == null || ramIndex !in 0 until ram.size) return
+                    ram[ramIndex] = value
                 }
-                ram[ramIndex] = value
             }
             in 0xC000..0xDFFF -> {
                 wram[addr - 0xC000] = value
