@@ -70,6 +70,11 @@ class Ppu(
     private var modeCycles: Int = 0 // 現在のモード内の累積サイクル数
     private var mode3Duration: Int = 172 // 現在のスキャンラインのMode 3の長さ（可変）
 
+    // スキャンラインごとのSCX/SCYスナップショット（ラスタースクロール対応）
+    // 各スキャンラインのMode 2（OAM Search）開始時にキャプチャする
+    private val scanlineScx = IntArray(SCREEN_HEIGHT)
+    private val scanlineScy = IntArray(SCREEN_HEIGHT)
+
     // DMA転送状態（SystemBusからアクセス可能にするため、publicにする）
     var dmaActive: Boolean = false
         private set
@@ -294,7 +299,9 @@ class Ppu(
                 checkLycMatch()
 
                 if (ly.toInt() < SCREEN_HEIGHT) {
-                    // 次のスキャンライン開始（Mode 2）
+                    // 次のスキャンライン開始（Mode 2）- SCX/SCYをキャプチャ（ラスタースクロール対応）
+                    scanlineScx[ly.toInt()] = scx.toInt()
+                    scanlineScy[ly.toInt()] = scy.toInt()
                     setMode(PpuMode.OAM_SEARCH)
                 } else if (ly == 144u.toUByte()) {
                     // VBlank開始（Mode 1）
@@ -303,7 +310,9 @@ class Ppu(
                     checkStatInterrupt(PpuMode.VBLANK)
                     checkLycMatch()
                 } else if (ly == 0u.toUByte()) {
-                    // VBlank終了、次のフレーム開始（Mode 2）
+                    // VBlank終了、次のフレーム開始（Mode 2）- スキャンライン0のSCX/SCYをキャプチャ
+                    scanlineScx[0] = scx.toInt()
+                    scanlineScy[0] = scy.toInt()
                     setMode(PpuMode.OAM_SEARCH)
                 }
             }
@@ -477,8 +486,6 @@ class Ppu(
         // レジスタ値を事前に計算（パフォーマンス向上）
         val lcdcInt = lcdc.toInt()
         val bgEnabled = (lcdcInt and 0x01) != 0
-        val scyInt = scy.toInt()
-        val scxInt = scx.toInt()
         val bgMapBase = if (((lcdcInt shr 3) and 0x1) == 0) BG_MAP0_BASE else BG_MAP1_BASE
         val tileDataMode = (lcdcInt shr 4) and 0x1
 
@@ -507,6 +514,9 @@ class Ppu(
 
         if (bgEnabled) {
             for (y in 0 until SCREEN_HEIGHT) {
+                // スキャンラインごとにキャプチャしたSCX/SCYを使用（ラスタースクロール対応）
+                val scxInt = scanlineScx[y]
+                val scyInt = scanlineScy[y]
                 // スクロールYを考慮した背景Y座標
                 val bgY = (y + scyInt) and 0xFF
                 val tileRow = bgY shr 3 // / 8 をビットシフトに置き換え
@@ -832,5 +842,4 @@ class Ppu(
         }
         return pixels
     }
-
 }

@@ -49,10 +49,10 @@ class PpuTest {
      *   step(1)   → LY++、新ライン OAM_SEARCH 開始（OAM STAT 割り込みチェック）
      */
     private fun Ppu.stepOneScanline() {
-        step(80)   // Mode 2: OAM_SEARCH → PIXEL_TRANSFER
-        step(172)  // Mode 3: PIXEL_TRANSFER → HBLANK
-        step(204)  // Mode 0: HBlank 完了
-        step(1)    // LY++ トリガー
+        step(80) // Mode 2: OAM_SEARCH → PIXEL_TRANSFER
+        step(172) // Mode 3: PIXEL_TRANSFER → HBLANK
+        step(204) // Mode 0: HBlank 完了
+        step(1) // LY++ トリガー
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -175,8 +175,8 @@ class PpuTest {
         ppu.writeRegister(0x01, 0x08u)
 
         // OAM_SEARCH(80) → PIXEL_TRANSFER(172) → HBLANK 遷移時に割り込みチェック
-        ppu.step(80)   // Mode 2 → 3
-        ppu.step(172)  // Mode 3 → 0（ここで HBLANK STAT 割り込みが発火）
+        ppu.step(80) // Mode 2 → 3
+        ppu.step(172) // Mode 3 → 0（ここで HBLANK STAT 割り込みが発火）
 
         val pending = ic.nextPending(imeEnabled = true)
         assertEquals(
