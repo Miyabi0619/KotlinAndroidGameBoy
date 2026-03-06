@@ -777,8 +777,7 @@ class Sound {
         // 位相を進める（周波数変化時も位相が連続するよう差分加算）
         square1State.phaseAccumulator += soundCyclesPerSample
         if (square1State.phaseAccumulator >= period) {
-            square1State.phaseAccumulator -= period
-            if (square1State.phaseAccumulator < 0.0) square1State.phaseAccumulator = 0.0
+            square1State.phaseAccumulator %= period
         }
         val dutyPosition = ((square1State.phaseAccumulator * 8.0 / period).toInt() and 0x07)
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
@@ -846,8 +845,7 @@ class Sound {
         // 位相を進める（周波数変化時も位相が連続するよう差分加算）
         square2State.phaseAccumulator += soundCyclesPerSample
         if (square2State.phaseAccumulator >= period) {
-            square2State.phaseAccumulator -= period
-            if (square2State.phaseAccumulator < 0.0) square2State.phaseAccumulator = 0.0
+            square2State.phaseAccumulator %= period
         }
         val dutyPosition = ((square2State.phaseAccumulator * 8.0 / period).toInt() and 0x07)
         val waveValue = if ((dutyPattern and (1 shl dutyPosition)) != 0) 1 else -1
@@ -1074,8 +1072,7 @@ class Sound {
         // 位相を進める（周波数変化時も位相が連続するよう差分加算）
         waveState.phaseAccumulator += soundCyclesPerSample
         if (waveState.phaseAccumulator >= period) {
-            waveState.phaseAccumulator -= period
-            if (waveState.phaseAccumulator < 0.0) waveState.phaseAccumulator = 0.0
+            waveState.phaseAccumulator %= period
         }
         // 32サンプルの波形なので、位置を0-31の範囲に正規化
         val sampleIndex = ((waveState.phaseAccumulator * 32.0 / period).toInt() and 0x1F)

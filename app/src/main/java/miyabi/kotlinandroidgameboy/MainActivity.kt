@@ -195,7 +195,7 @@ private fun gameScreen(
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
         }
-    val audioQueue = remember { java.util.concurrent.ArrayBlockingQueue<ShortArray>(8) }
+    val audioQueue = remember { java.util.concurrent.ArrayBlockingQueue<ShortArray>(2) }
     val audioRunning = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     // 専用オーディオスレッド（ゲームループのジッターをキューで隔離）
     LaunchedEffect(isRunning) {
@@ -261,8 +261,12 @@ private fun gameScreen(
             when (val result = gameLoop.runSingleFrame(mergedInput)) {
                 is CoreResult.Success -> {
                     // オーディオサンプルをキューへ（専用スレッドが書き込む）
+                    // put() を使いキューが満杯のとき停止してフレームドロップを防ぐ
+                    // これによりエミュレータがオーディオ再生速度に自然同期する
                     result.value.audioSamples?.let { samples ->
-                        audioQueue.offer(samples)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            audioQueue.put(samples)
+                        }
                     }
 
                     // 描画はスキップ判定に基づいて処理
