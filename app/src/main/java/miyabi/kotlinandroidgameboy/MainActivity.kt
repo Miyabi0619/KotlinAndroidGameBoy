@@ -202,13 +202,15 @@ private fun gameScreen(
         if (!isRunning) return@LaunchedEffect
         audioRunning.set(true)
         audioTrack.play()
-        val audioThread = Thread {
-            while (audioRunning.get()) {
-                val samples = audioQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
-                    ?: continue
-                audioTrack.write(samples, 0, samples.size)
+        val audioThread =
+            Thread {
+                while (audioRunning.get()) {
+                    val samples =
+                        audioQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+                            ?: continue
+                    audioTrack.write(samples, 0, samples.size)
+                }
             }
-        }
         audioThread.name = "GB-AudioThread"
         audioThread.priority = Thread.MAX_PRIORITY
         audioThread.start()
