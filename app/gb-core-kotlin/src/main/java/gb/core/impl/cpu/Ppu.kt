@@ -833,33 +833,4 @@ class Ppu(
         return pixels
     }
 
-    /**
-     * カラーIDをARGBに変換する。
-     *
-     * @param colorId カラーID (0-3)
-     * @param bgp BGパレットレジスタ (0xFF47)
-     * @return ARGB値
-     */
-    private fun mapColorIdToArgb(
-        colorId: Int,
-        bgp: UByte,
-    ): Int {
-        // BGPレジスタからカラーIDに対応するパレットエントリを取得
-        // BGPのビット構成: [color3][color2][color1][color0] (各2bit)
-        val paletteEntry = (bgp.toInt() shr (colorId * 2)) and 0x03
-
-        // Game Boyの4階調グレースケールパレット
-        return when (paletteEntry) {
-            0 -> 0xFFFFFFFF.toInt()
-
-            // 白
-            1 -> 0xFFAAAAAA.toInt()
-
-            // 薄いグレー
-            2 -> 0xFF555555.toInt()
-
-            // 濃いグレー
-            else -> 0xFF000000.toInt() // 黒
-        }
-    }
 }

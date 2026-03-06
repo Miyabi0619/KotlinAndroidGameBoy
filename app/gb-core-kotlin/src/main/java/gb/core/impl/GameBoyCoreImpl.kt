@@ -106,8 +106,8 @@ class GameBoyCoreImpl : GameBoyCore {
                         // これによりVBlank/Timer割り込みでHALTから復帰できる
                         val chunk = 456
                         val steps = remainingCycles / chunk
-                        for (s in 0 until steps) {
-                            if (!m.cpu.isHalted()) break
+                        repeat(steps) {
+                            if (!m.cpu.isHalted()) return@repeat
                             val c = m.stepInstruction()
                             accumulatedCycles += c
                             instructionCount++
@@ -258,8 +258,7 @@ class GameBoyCoreImpl : GameBoyCore {
      */
     fun getCartridgeRam(): ByteArray? {
         val m = machine ?: return null
-        if (!m.hasBattery) return null
-        return m.getCartridgeRam()
+        return if (m.hasBattery) m.getCartridgeRam() else null
     }
 
     /**

@@ -107,7 +107,7 @@ class Timer(
      * 実機ではDIVの内部16bitカウンタの特定ビットの立ち下がりエッジでTIMAを更新する。
      */
     fun step(cycles: Int) {
-        for (i in 0 until cycles) {
+        repeat(cycles) {
             stepOneTCycle()
         }
     }

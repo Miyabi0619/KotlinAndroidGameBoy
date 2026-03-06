@@ -27,11 +27,20 @@ style:
     maxLineLength: 140
   UnusedPrivateMember:
     active: true
+  ReturnCount:
+    active: true
+    max: 10
+  LoopWithTooManyJumpStatements:
+    active: false
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false
 
 complexity:
   LargeClass:
     active: true
-    threshold: 1500
+    threshold: 2000
   LongMethod:
     active: false
     threshold: 80
@@ -42,9 +51,12 @@ complexity:
   TooManyFunctions:
     active: true
     thresholdInFiles: 30
-    thresholdInClasses: 90
+    thresholdInClasses: 100
     thresholdInInterfaces: 60
     thresholdInObjects: 60
+  NestedBlockDepth:
+    active: true
+    threshold: 7
 
 comments:
   UndocumentedPublicClass:

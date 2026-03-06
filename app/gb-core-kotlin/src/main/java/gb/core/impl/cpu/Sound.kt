@@ -152,9 +152,6 @@ class Sound {
                         // 現在再生中のサンプル位置のバイトインデックス
                         val currentByteIndex = (sampleIndex / 2).coerceIn(0, 15)
 
-                        // 読み取りオフセットに対応するバイトインデックス
-                        val readByteIndex = offset - 0x20
-
                         // 実機の動作: 波形RAMの読み取りは、現在再生中のサンプル位置のバイトが返される
                         // より正確には、読み取りオフセットが現在再生中のサンプル位置と一致する場合、その値を返す
                         // 実機では、波形RAMの読み取りは、現在再生中のサンプル位置のバイトが返される
@@ -601,8 +598,6 @@ class Sound {
         val nr51 = soundRegs[0x15] // NR51 (Channel Select)
         val leftVolume = (nr50.toInt() shr 4) and 0x07 // 0-7（0 はミュート）
         val rightVolume = nr50.toInt() and 0x07 // 0-7（0 はミュート）
-        val vinToLeft = (nr50.toInt() and 0x08) != 0 // Bit 3: SO1端子へのVin出力
-        val vinToRight = (nr50.toInt() and 0x80) != 0 // Bit 7: SO2端子へのVin出力
         val nr51Int = nr51.toInt()
 
         // チャンネルの有効性を事前にチェック（ループ内の条件分岐を削減）
@@ -993,17 +988,6 @@ class Sound {
     }
 
     /**
-     * Waveチャンネルの状態を更新（現在は何もしない）
-     * 長さカウンタはupdateLengthCounters()で更新される
-     * 波形位置はサンプル生成時に直接計算するため、ここでは更新しない
-     */
-    private fun updateWaveChannel(soundCycles: Int) {
-        // 波形位置の更新（周波数に基づく）
-        // 注意: 波形位置はサンプル生成時に直接計算するため、ここでは更新しない
-        // 実機では、波形位置は周波数に基づいて自動的に更新される
-    }
-
-    /**
      * Noiseチャンネルのエンベロープを更新（フレームシーケンサの64Hzステップで呼ばれる）
      */
     private fun updateNoiseEnvelope() {
@@ -1079,7 +1063,6 @@ class Sound {
             return 0
         }
 
-        val nr32 = soundRegs[0x0C] // NR32 (Volume)
         val nr33 = soundRegs[0x0D] // NR33 (Frequency Low)
         val nr34 = soundRegs[0x0E] // NR34 (Frequency High & Trigger)
 
