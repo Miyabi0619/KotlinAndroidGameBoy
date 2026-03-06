@@ -174,7 +174,7 @@ private fun gameScreen(
             val sampleRate = 44100
             val channelConfig = AudioFormat.CHANNEL_OUT_STEREO // ステレオ出力に変更
             val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-            val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 2
+            val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat) * 4
 
             AudioTrack
                 .Builder()
@@ -195,13 +195,31 @@ private fun gameScreen(
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
         }
-    // オーディオ出力の開始/停止
+    val audioQueue = remember { java.util.concurrent.ArrayBlockingQueue<ShortArray>(8) }
+    val audioRunning = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    // 専用オーディオスレッド（ゲームループのジッターをキューで隔離）
     LaunchedEffect(isRunning) {
-        if (isRunning) {
-            audioTrack.play()
-        } else {
+        if (!isRunning) return@LaunchedEffect
+        audioRunning.set(true)
+        audioTrack.play()
+        val audioThread = Thread {
+            while (audioRunning.get()) {
+                val samples = audioQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    ?: continue
+                audioTrack.write(samples, 0, samples.size)
+            }
+        }
+        audioThread.name = "GB-AudioThread"
+        audioThread.priority = Thread.MAX_PRIORITY
+        audioThread.start()
+        try {
+            kotlinx.coroutines.awaitCancellation()
+        } finally {
+            audioRunning.set(false)
+            audioThread.join(500)
             audioTrack.pause()
             audioTrack.flush()
+            audioQueue.clear()
         }
     }
     // シンプルなゲームループ（UI スレッドを塞がないようにコルーチンで）
@@ -217,7 +235,6 @@ private fun gameScreen(
         // フレームレート制御用の変数
         val targetFrameTime = 1000.0 / 59.7275 // 約16.74ms（実機のフレームレート）
         var lastFrameTime = System.nanoTime() / 1_000_000.0 // より高精度なタイミング制御
-        var audioBufferSize = 0 // 音声バッファのサイズを追跡
         while (isRunning && romLoaded) {
             val frameStartTime = System.nanoTime() / 1_000_000.0
 
@@ -241,20 +258,9 @@ private fun gameScreen(
             val mergedInput = mergeInput(uiInput, InputStateHolder.controllerInput.value)
             when (val result = gameLoop.runSingleFrame(mergedInput)) {
                 is CoreResult.Success -> {
-                    // オーディオサンプルは常に出力（タイミングを保つため）
+                    // オーディオサンプルをキューへ（専用スレッドが書き込む）
                     result.value.audioSamples?.let { samples ->
-                        if (audioTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                            val written = audioTrack.write(samples, 0, samples.size)
-                            audioBufferSize += samples.size - written
-
-                            // バッファが溜まりすぎている場合は警告
-                            if (audioBufferSize > samples.size * 10) {
-                                if (frameCount % 300 == 0) {
-                                    android.util.Log.w("GameLoop", "Audio buffer overflow: $audioBufferSize samples")
-                                }
-                                audioBufferSize = samples.size * 5 // リセット
-                            }
-                        }
+                        audioQueue.offer(samples)
                     }
 
                     // 描画はスキップ判定に基づいて処理
@@ -275,7 +281,7 @@ private fun gameScreen(
                             "GameLoop",
                             "Frame $frameCount: FPS=${String.format(java.util.Locale.US, "%.2f", actualFps)}, " +
                                 "skipped=$skippedFrames (${String.format(java.util.Locale.US, "%.1f", skipRate)}%), " +
-                                "audioBuffer=$audioBufferSize",
+                                "audioQueue=${audioQueue.size}",
                         )
                     }
                 }
