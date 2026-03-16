@@ -2001,6 +2001,187 @@ class CpuTest {
         assertEquals(4, cyclesWhileStopped)
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // ADD SP, e（0xE8）
+    // Pan Docs: SP = SP + signed_offset; Z=0, N=0; H/C は下位8bit加算で判定
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `ADD SP e positive offset updates SP and clears Z and N flags`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: E8 10 (ADD SP, +0x10)
+        memory[0x0100] = 0xE8u
+        memory[0x0101] = 0x10u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFF00u.toUShort()
+        cpu.registers.flagZ = true
+        cpu.registers.flagN = true
+
+        val cycles = cpu.executeInstruction()
+
+        assertEquals(16, cycles)
+        assertEquals(0xFF10u.toUShort(), cpu.registers.sp)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+        // Z と N は常に 0
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        // spLow=0x00 + eLow=0x10 = 0x10 → H/C とも 0
+        assertEquals(false, cpu.registers.flagH)
+        assertEquals(false, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `ADD SP e sets H and C flags on nibble and byte carry`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: E8 08 (ADD SP, +0x08)
+        // SP=0xFFF8: spLow=0xF8, eLow=0x08, sumLow=0x100 → H=1, C=1
+        // result=(0xFFF8+8) and 0xFFFF = 0x0000
+        memory[0x0100] = 0xE8u
+        memory[0x0101] = 0x08u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFFF8u.toUShort()
+
+        cpu.executeInstruction()
+
+        assertEquals(0x0000u.toUShort(), cpu.registers.sp)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+        assertEquals(true, cpu.registers.flagH)
+        assertEquals(true, cpu.registers.flagC)
+    }
+
+    @Test
+    fun `ADD SP e negative offset subtracts from SP`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: E8 F0 (ADD SP, -16)
+        // SP=0xFF10: 0xFF10 + (-16) = 0xFF00
+        memory[0x0100] = 0xE8u
+        memory[0x0101] = 0xF0u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.sp = 0xFF10u.toUShort()
+
+        cpu.executeInstruction()
+
+        assertEquals(0xFF00u.toUShort(), cpu.registers.sp)
+        assertEquals(false, cpu.registers.flagZ)
+        assertEquals(false, cpu.registers.flagN)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // HALTバグ（Pan Docs: CPU Instruction Reference / HALT）
+    // IME=0 かつ (IE & IF) != 0 のとき HALT を実行すると、
+    // 次の命令のオペコードが PC をインクリメントせずに読まれる（ダブルフェッチ）
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `HALT bug double-fetches next opcode when IME is disabled and interrupt is pending`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 76 (HALT)
+        // 0x0101: 3C (INC A)
+        // 0x0102: 3C (INC A)
+        memory[0x0100] = 0x76u
+        memory[0x0101] = 0x3Cu
+        memory[0x0102] = 0x3Cu
+
+        // IE (0xFFFF): VBLANK 許可
+        memory[0xFFFF] = 0x01u
+        // IF (0xFF0F): VBLANK ペンディング
+        memory[0xFF0F] = 0x01u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x00u
+        // IME = false（デフォルト）→ HALTバグ発動条件
+
+        // HALT 実行: HALTバグで HALT 状態には入らず、PC = 0x0101 に進み haltBugActive = true
+        val cyclesHalt = cpu.executeInstruction()
+        assertEquals(4, cyclesHalt)
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+
+        // haltBugActive の状態でオペコード実行: 0x0101 の INC A が実行されるが PC は進まない
+        val cyclesBugged = cpu.executeInstruction()
+        assertEquals(4, cyclesBugged)
+        assertEquals(1u.toUByte(), cpu.registers.a) // INC A が実行された
+        // HALTバグ: PC は 0x0101 のまま（インクリメントをスキップ）
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+
+        // 次の命令は通常通り 0x0101 から実行（PC が 0x0102 に進む）
+        val cyclesNormal = cpu.executeInstruction()
+        assertEquals(4, cyclesNormal)
+        assertEquals(2u.toUByte(), cpu.registers.a) // もう一度 INC A
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `HALT does not trigger bug when IME is disabled but no interrupt is pending`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: 76 (HALT)
+        memory[0x0100] = 0x76u
+
+        // IE=0x01, IF=0x00 → (IE & IF) = 0 → HALTバグなし、通常の HALT
+        memory[0xFFFF] = 0x01u
+        memory[0xFF0F] = 0x00u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+
+        val cyclesHalt = cpu.executeInstruction()
+        assertEquals(4, cyclesHalt)
+
+        // 通常の HALT: CPU は HALT 状態になる（PC は 0x0101）
+        val cyclesWhileHalted = cpu.executeInstruction()
+        assertEquals(4, cyclesWhileHalted)
+        // PC は 0x0101 から進まない（HALT 状態）
+        assertEquals(0x0101u.toUShort(), cpu.registers.pc)
+    }
+
+    @Test
+    fun `HALT bug does not trigger when IME is enabled`() {
+        val memory = UByteArray(MEMORY_SIZE) { 0x00u }
+        val bus = InMemoryBus(memory)
+
+        // 0x0100: FB (EI)
+        // 0x0101: 76 (HALT)
+        // 0x0102: 3C (INC A)
+        memory[0x0100] = 0xFBu
+        memory[0x0101] = 0x76u
+        memory[0x0102] = 0x3Cu
+
+        // IE=0x01, IF=0x01 → ペンディングあり
+        memory[0xFFFF] = 0x01u
+        memory[0xFF0F] = 0x01u
+
+        val cpu = Cpu(bus)
+        cpu.registers.pc = 0x0100u.toUShort()
+        cpu.registers.a = 0x00u
+
+        // EI 実行（次命令から IME 有効）
+        cpu.executeInstruction()
+
+        // HALT 実行: IME=1 なので通常の HALT（バグなし）
+        // IME=1 かつ IE & IF ≠ 0 の場合、HALT は入るが次の割り込みサービスで即座に復帰する
+        // ここでは CPU 単体テストなので HALT 状態に入ることのみ確認
+        val cyclesHalt = cpu.executeInstruction()
+        assertEquals(4, cyclesHalt)
+        assertEquals(0x0102u.toUShort(), cpu.registers.pc)
+    }
+
     private class InMemoryBus(
         private val memory: UByteArray,
     ) : Bus {

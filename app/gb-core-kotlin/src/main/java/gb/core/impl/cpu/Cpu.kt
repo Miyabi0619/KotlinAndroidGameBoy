@@ -43,6 +43,7 @@ class Cpu(
         const val LD_SP_HL: Int = 8
         const val LD_NN_SP: Int = 20
         const val LD_HL_SP_E: Int = 12
+        const val ADD_SP_E: Int = 16
         const val ALU_R: Int = 4
         const val ALU_N: Int = 8
         const val ALU_FROM_HL: Int = 8
@@ -957,6 +958,11 @@ class Cpu(
                 executeRst(0x18u)
             }
 
+            // ADD SP, e
+            0xE8 -> {
+                executeAddSpImmediate()
+            }
+
             // RST 18H
             0xE7 -> {
                 executeRst(0x20u)
@@ -1722,6 +1728,38 @@ class Cpu(
         registers.flagC = (spLow xor eLow xor sumLow) and 0x100 != 0
 
         return Cycles.LD_HL_SP_E
+    }
+
+    /**
+     * ADD SP, e 命令。
+     *
+     * - オペコード: 0xE8
+     * - サイクル数: 16
+     * - フラグ:
+     *   - Z: 0
+     *   - N: 0
+     *   - H/C: SP の下位 8bit とオフセットの加算結果に基づく
+     */
+    private fun executeAddSpImmediate(): Int {
+        val pc = registers.pc
+        val offset = bus.readByte(pc)
+        registers.pc = (pc.toInt() + 1).toUShort()
+
+        val sp = registers.sp.toInt()
+        val e = signExtend(offset)
+        val result = sp + e
+
+        val spLow = sp and 0xFF
+        val eLow = e and 0xFF
+        val sumLow = spLow + eLow
+
+        registers.sp = result.toUShort()
+        registers.flagZ = false
+        registers.flagN = false
+        registers.flagH = (spLow xor eLow xor sumLow) and 0x10 != 0
+        registers.flagC = (spLow xor eLow xor sumLow) and 0x100 != 0
+
+        return Cycles.ADD_SP_E
     }
 
     /**
