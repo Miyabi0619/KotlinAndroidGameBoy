@@ -379,4 +379,132 @@ class PpuTest {
             firstPixelScrolled,
         )
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // STAT 割り込みエッジ検出（Pan Docs: STAT Blocking Glitch / Signal combiner）
+    //
+    // 実機 GB の STAT 割り込みは複数ソース（HBlank/OAM/VBlank/LYC=LY）を OR 合成した
+    // 1 本の信号線の "立ち上がりエッジ" でのみ発火する。
+    // HBlank → OAM 遷移時に、信号線が High のままなら追加割り込みは発生しない。
+    // ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `STAT fires only once per scanline when both HBlank and OAM interrupts are enabled`() {
+        // bit3（HBlank）+ bit5（OAM）の両方を有効化。
+        //
+        // 実機仕様: STAT 信号は各ソースを OR 合成した 1 本の線の "立ち上がりエッジ" でのみ発火。
+        // - OAM_SEARCH: 信号 high（bit5=1, mode=OAM）
+        // - PIXEL_TRANSFER: 信号 low（mode 対応ソースなし、LYC≠LY）
+        // - HBLANK: 信号 high（bit3=1, mode=HBlank）← 立ち上がり → 割り込み発火
+        // - LY++ → 次の OAM_SEARCH: 信号 high のまま（HBLANK が high → OAM も high）→ 追加割り込みなし
+        //
+        // → 1 スキャンラインにつき HBLANK での 1 回のみ発火。
+        val (ppu, ic) = makePpu()
+        ppu.writeRegister(0x01, 0x28u) // STAT: bit3=HBlank, bit5=OAM
+
+        // OAM_SEARCH → PIXEL_TRANSFER（信号 low）→ HBLANK 遷移で割り込み発火
+        ppu.step(80)
+        ppu.step(172)
+
+        val firstInterrupt = ic.nextPending(imeEnabled = true)
+        assertEquals(
+            "PIXEL_TRANSFER→HBLANK 遷移で LCD_STAT 割り込みが1回発生するはず",
+            InterruptController.Type.LCD_STAT,
+            firstInterrupt,
+        )
+
+        // HBLANK → 次スキャンラインの OAM_SEARCH へ遷移
+        // 信号は HBLANK(high) → OAM(high) のまま → 立ち上がりなし → 追加割り込みなし
+        ppu.step(204)
+        ppu.step(1) // LY++ + OAM_SEARCH 開始
+
+        val noSecondInterrupt = ic.nextPending(imeEnabled = true)
+        assertEquals(
+            "HBLANK→OAM 遷移は信号が high のまま（立ち上がりなし）なので追加 STAT は発生しないはず",
+            null,
+            noSecondInterrupt,
+        )
+
+        // 次のスキャンラインでもう一度 PIXEL_TRANSFER → HBLANK で発火することを確認
+        ppu.step(80)  // OAM→PIXEL_TRANSFER（信号 low）
+        ppu.step(172) // PIXEL_TRANSFER→HBLANK（信号 0→1 → 発火）
+
+        val thirdInterrupt = ic.nextPending(imeEnabled = true)
+        assertEquals(
+            "次のスキャンラインでも HBLANK 遷移で LCD_STAT が発火するはず",
+            InterruptController.Type.LCD_STAT,
+            thirdInterrupt,
+        )
+    }
+
+    @Test
+    fun `STAT does not fire again when line stays high from HBlank directly to VBlank`() {
+        // LY=143 のスキャンラインで HBlank（bit3）と VBlank（bit4）の両方が有効な場合
+        // HBlank で signal=1、その後 VBlank（signal=1のまま）→ 追加割り込みなし
+        val (ppu, ic) = makePpu()
+        ppu.writeRegister(0x01, 0x18u) // STAT: bit3=HBlank + bit4=VBlank
+
+        // LY=143 まで進める（HBlank 割り込みは1スキャンごとに発火）
+        repeat(143) {
+            ppu.step(80)
+            ppu.step(172) // HBlank 割り込み発火（各スキャンライン）
+            ic.nextPending(imeEnabled = true) // 割り込みを消費
+            ppu.step(204)
+            ppu.step(1) // LY++
+        }
+
+        // LY=143 のスキャンライン: HBlank→VBlank の遷移
+        ppu.step(80)
+        ppu.step(172) // HBlank 割り込み発火
+        val hblankInterrupt = ic.nextPending(imeEnabled = true)
+        assertEquals(
+            "LY=143 の HBlank で LCD_STAT 割り込みが発生するはず",
+            InterruptController.Type.LCD_STAT,
+            hblankInterrupt,
+        )
+
+        // HBlank→VBlank 遷移
+        ppu.step(204)
+        ppu.step(1) // LY=144 → VBlank 開始
+
+        // VBLANK 割り込みは発火するはず（VBlank 自体は別の割り込みライン）
+        val vblankInterrupt = ic.nextPending(imeEnabled = true)
+        assertEquals(
+            "LY=144 で VBLANK 割り込みが発生するはず",
+            InterruptController.Type.VBLANK,
+            vblankInterrupt,
+        )
+
+        // STAT bit4=VBlank が有効: HBlank（high）→ VBlank（high）で信号がhighのまま→ 追加 STAT なし
+        val extraStat = ic.nextPending(imeEnabled = true)
+        assertEquals(
+            "HBlank→VBlank の連続 high では STAT 割り込みが重複発火しないはず",
+            null,
+            extraStat,
+        )
+    }
+
+    @Test
+    fun `STAT LYC interrupt fires again on next scanline when LYC matches new LY`() {
+        // LYC=2 を設定。LY=2 で1回発火後、LY=3 では発火しない（LYC≠LY）
+        // LY が再び 2 に来ると再発火するが、それは 154 スキャンライン後
+        val (ppu, ic) = makePpu()
+        ppu.writeRegister(0x05, 2u) // LYC = 2
+        ppu.writeRegister(0x01, 0x40u) // STAT bit6: LYC=LY 割り込み許可
+
+        // LY=2 になるまで進める
+        repeat(2) { ppu.stepOneScanline() }
+
+        val interrupt = ic.nextPending(imeEnabled = true)
+        assertEquals(InterruptController.Type.LCD_STAT, interrupt)
+
+        // LY=3 になっても LYC=2 なので割り込みなし
+        ppu.stepOneScanline()
+        val noInterrupt = ic.nextPending(imeEnabled = true)
+        assertEquals(
+            "LY=3 のとき LYC=2 なので STAT 割り込みは発生しないはず",
+            null,
+            noInterrupt,
+        )
+    }
 }

@@ -72,16 +72,28 @@ class Sound {
     }
 
     // サウンドレジスタ（0xFF10-0xFF3F）
-    // 初期値: 実機では、NR52のbit 7は電源ON時に1になる
-    // ただし、他のレジスタは0で初期化される
+    // 初期値: DMG のブートROM 終了後のAPUレジスタ値（Pan Docs 参照）
+    // NR10=$80, NR11=$BF, NR12=$F3, NR14=$BF,
+    // NR21=$3F, NR24=$BF, NR30=$7F, NR31=$FF, NR32=$9F, NR34=$BF,
+    // NR41=$FF, NR44=$BF, NR50=$77, NR51=$F3, NR52=$F1
     private val soundRegs: UByteArray =
-        UByteArray(0x30) {
-            if (it == 0x16) {
-                // NR52 (0xFF26) の bit 7 を初期化時に1にする（サウンド有効）
-                0x80u.toUByte()
-            } else {
-                0u
-            }
+        UByteArray(0x30).also { regs ->
+            regs[0x00] = 0x80u // NR10
+            regs[0x01] = 0xBFu // NR11
+            regs[0x02] = 0xF3u // NR12
+            regs[0x04] = 0xBFu // NR14
+            regs[0x06] = 0x3Fu // NR21
+            regs[0x09] = 0xBFu // NR24
+            regs[0x0A] = 0x7Fu // NR30
+            regs[0x0B] = 0xFFu // NR31
+            regs[0x0C] = 0x9Fu // NR32
+            regs[0x0D] = 0xFBu // NR33
+            regs[0x0E] = 0xBFu // NR34
+            regs[0x10] = 0xFFu // NR41
+            regs[0x13] = 0xBFu // NR44
+            regs[0x14] = 0x77u // NR50: 左右ともに最大音量7
+            regs[0x15] = 0xF3u // NR51: 各チャンネルの出力ルーティング
+            regs[0x16] = 0xF1u // NR52: サウンド有効、Square1 アクティブ
         }
 
     // 波形RAM（0xFF30-0xFF3F、Waveチャンネル用）
@@ -93,6 +105,30 @@ class Sound {
     // これにより浮動小数点の精度劣化を完全に回避
     private var halfSoundCycleCounter: Long = 0L
     private var frameStartHalfSoundCycle: Long = 0L
+
+    // 1-bit PCM サポート: フレーム内の NR50/NR51 書き込みをタイムスタンプ付きで記録する。
+    // ポケモンのピカチュウの鳴き声など、CPU がマスターボリューム(NR50)を高速切り替えして
+    // デジタル音声を再現する手法に対応するため、サンプル単位で書き込みを適用する。
+    //
+    // タイムスタンプは「フレーム先頭からの経過半サウンドサイクル数」で記録する。
+    // 絶対カウンタ (halfSoundCycleCounter) を使うと割り込みオーバーヘッド等で
+    // フレームをまたぐ drift が蓄積し、書き込みが全サンプルで無視される不具合が生じる。
+    private val pcmWriteRelHalfCycles = LongArray(512) // フレーム先頭からの経過半サウンドサイクル
+    private val pcmWriteOffsets = IntArray(512)         // レジスタオフセット (0x14=NR50 / 0x15=NR51)
+    private val pcmWriteValues = UByteArray(512)        // 書き込まれた値
+    private var pcmWriteCount = 0                       // 今フレームの書き込み数
+    private var frameHalfCycles: Long = 0L              // フレーム内経過半サウンドサイクル（毎フレームリセット）
+
+    // スキャンラインPCM: CH1/CH2 のトリガーイベントをタイムスタンプ付きで記録する。
+    // ゲームが毎スキャンライン NR12(音量) + NR14(トリガー) を書き込む手法で
+    // 9.2kHz 相当の PCM オーディオを再現する。
+    // フレーム終了時の単一音量値ではなく、サンプル単位で音量を更新することで正確な再生を実現する。
+    private val sq1TriggerRelHalfCycles = LongArray(512)
+    private val sq1TriggerVolumes = IntArray(512)
+    private var sq1TriggerCount = 0
+    private val sq2TriggerRelHalfCycles = LongArray(512)
+    private val sq2TriggerVolumes = IntArray(512)
+    private var sq2TriggerCount = 0
 
     // フレームシーケンサ（512Hz = SOUND_FREQUENCY / 1024 = 8192 Hz / 16）
     // 8ステップ（0-7）で Length / Sweep / Envelope を更新する
@@ -199,12 +235,10 @@ class Sound {
 
         // 波形RAM（0xFF30-0xFF3F）の書き込み
         if (offset >= 0x20) {
-            // Waveチャンネルが有効な場合、波形RAMへの書き込みは制限される
-            // 実機では、Waveチャンネルが有効な場合、波形RAMは読み取り専用になる
-            // ただし、簡易実装として、Waveチャンネルが有効な場合は書き込みを無視
-            if (!waveState.enabled) {
-                waveRam[offset - 0x20] = value
-            }
+            // 実機の厳密な仕様では Wave チャンネル再生中は書き込み先バイトが限定されるが、
+            // CPU が wave RAM を高速更新する 4-bit PCM ストリーミング（ポケモンの鳴き声等）の
+            // 再現には常時書き込みを許可する必要がある。
+            waveRam[offset - 0x20] = value
             return
         }
 
@@ -307,6 +341,12 @@ class Sound {
                     square1State.lengthCounterAccumulator = 0
                     // 位相をリセット（Trigger時は波形の先頭から再生）
                     square1State.phaseAccumulator = 0.0
+                    // スキャンラインPCM: トリガーイベントをフレーム内タイムスタンプ付きで記録
+                    if (sq1TriggerCount < sq1TriggerRelHalfCycles.size) {
+                        sq1TriggerRelHalfCycles[sq1TriggerCount] = frameHalfCycles
+                        sq1TriggerVolumes[sq1TriggerCount] = square1State.envelopeVolume
+                        sq1TriggerCount++
+                    }
                     // スイープの初期化
                     val nr10 = soundRegs[0x00]
                     sweepPeriod = ((nr10.toInt() shr 4) and 0x07)
@@ -367,6 +407,12 @@ class Sound {
                     square2State.lengthCounterAccumulator = 0
                     // 位相をリセット（Trigger時は波形の先頭から再生）
                     square2State.phaseAccumulator = 0.0
+                    // スキャンラインPCM: トリガーイベントをフレーム内タイムスタンプ付きで記録
+                    if (sq2TriggerCount < sq2TriggerRelHalfCycles.size) {
+                        sq2TriggerRelHalfCycles[sq2TriggerCount] = frameHalfCycles
+                        sq2TriggerVolumes[sq2TriggerCount] = square2State.envelopeVolume
+                        sq2TriggerCount++
+                    }
                 }
             }
 
@@ -498,6 +544,16 @@ class Sound {
                 }
             }
         }
+
+        // 1-bit PCM: NR50(0x14)/NR51(0x15) の書き込みをフレーム内相対タイムスタンプで記録。
+        // generateSamples() でサンプル単位にリプレイすることで、CPU によるマスターボリューム
+        // 高速切り替え（ピカチュウの鳴き声など）を正確に再現する。
+        if ((offset == 0x14 || offset == 0x15) && pcmWriteCount < pcmWriteRelHalfCycles.size) {
+            pcmWriteRelHalfCycles[pcmWriteCount] = frameHalfCycles
+            pcmWriteOffsets[pcmWriteCount] = offset
+            pcmWriteValues[pcmWriteCount] = soundRegs[offset]
+            pcmWriteCount++
+        }
     }
 
     /**
@@ -512,6 +568,7 @@ class Sound {
         // 半サウンドサイクル = CPUサイクル / 4（常に整数）
         val halfSoundCycles = cycles / 4
         halfSoundCycleCounter += halfSoundCycles
+        frameHalfCycles += halfSoundCycles
 
         // フレームシーケンサ（512Hz）をDIVレジスタのbit 12の立ち下がりエッジで進める
         // 実機仕様: DIVレジスタの内部16bitカウンタのbit 12が1→0になるタイミングで更新
@@ -565,6 +622,19 @@ class Sound {
     }
 
     /**
+     * デバッグ用: チャンネルの内部状態を文字列で返す（android.util.Log非依存）。
+     */
+    fun getDebugState(): String {
+        val sq1freq = ((soundRegs[0x04].toInt() and 0x07) shl 8) or soundRegs[0x03].toInt()
+        val sq2freq = ((soundRegs[0x09].toInt() and 0x07) shl 8) or soundRegs[0x08].toInt()
+        return "sq1[en=${square1State.enabled} vol=${square1State.envelopeVolume} freq=$sq1freq " +
+            "nr12=0x${soundRegs[0x02].toString(16)}] " +
+            "sq2[en=${square2State.enabled} vol=${square2State.envelopeVolume} freq=$sq2freq " +
+            "nr22=0x${soundRegs[0x07].toString(16)}] " +
+            "pcmWrites=$pcmWriteCount"
+    }
+
+    /**
      * 1フレーム分のオーディオサンプルを生成する（ステレオ形式）。
      *
      * @return 16bit PCMサンプル配列（ステレオ形式、左右交互、約735サンプル×2）
@@ -575,6 +645,10 @@ class Sound {
 
         if (!soundEnabled) {
             // サウンドが無効な場合は無音を返す（ステレオ形式）
+            pcmWriteCount = 0
+            sq1TriggerCount = 0
+            sq2TriggerCount = 0
+            frameHalfCycles = 0L
             return ShortArray(SAMPLES_PER_FRAME * 2) { 0 }
         }
 
@@ -598,41 +672,91 @@ class Sound {
         // ステレオ形式（左右交互）のサンプル配列
         val samples = ShortArray(SAMPLES_PER_FRAME * 2)
 
-        // レジスタ読み取りをループ外に移動（パフォーマンス向上）
-        val nr50 = soundRegs[0x14] // NR50 (Master Volume)
-        val nr51 = soundRegs[0x15] // NR51 (Channel Select)
-        val leftVolume = (nr50.toInt() shr 4) and 0x07 // 0-7（0 はミュート）
-        val rightVolume = nr50.toInt() and 0x07 // 0-7（0 はミュート）
-        val nr51Int = nr51.toInt()
-
         // チャンネルの有効性を事前にチェック（ループ内の条件分岐を削減）
+        // チャンネル有効状態はサンプル生成中に変化しないのでループ外でキャッシュ
         val square1Enabled = square1State.enabled
         val square2Enabled = square2State.enabled
         val waveEnabled = waveState.enabled
         val noiseEnabled = noiseState.enabled
 
-        // チャンネル出力マスクを事前に計算
-        // 実機の仕様に基づく正しいビットマスク
-        // NR51: Bit 7-4 = SO2(左チャンネル), Bit 3-0 = SO1(右チャンネル)
-        val square1Left = (nr51Int and 0x10) != 0 // Bit 4: Square1 -> SO2(左)
-        val square1Right = (nr51Int and 0x01) != 0 // Bit 0: Square1 -> SO1(右)
-        val square2Left = (nr51Int and 0x20) != 0 // Bit 5: Square2 -> SO2(左)
-        val square2Right = (nr51Int and 0x02) != 0 // Bit 1: Square2 -> SO1(右)
-        val waveLeft = (nr51Int and 0x40) != 0 // Bit 6: Wave -> SO2(左)
-        val waveRight = (nr51Int and 0x04) != 0 // Bit 2: Wave -> SO1(右)
-        val noiseLeft = (nr51Int and 0x80) != 0 // Bit 7: Noise -> SO2(左)
-        val noiseRight = (nr51Int and 0x08) != 0 // Bit 3: Noise -> SO1(右)
+        // 1-bit PCM: NR50/NR51 はフレーム内書き込みログを使いサンプル単位で追跡する。
+        // 初期値: このフレーム開始時点のレジスタ値（= 前フレーム最終書き込み値）
+        var currentNr50 = soundRegs[0x14]
+        var currentNr51 = soundRegs[0x15]
+        var pcmWritePtr = 0
 
-        // 各チャンネルからサンプルを生成してミキシング
-        // 最適化: ループ内の計算を削減、条件分岐を最適化
+        // スキャンラインPCM: CH1/CH2のトリガーログをサンプル単位でリプレイする。
+        // 初期値: フレーム開始前の最後のトリガー音量（存在しない場合は現状のエンベロープ値）
+        var currentSq1Volume = square1State.envelopeVolume
+        var currentSq2Volume = square2State.envelopeVolume
+        var sq1TriggerPtr = 0
+        var sq2TriggerPtr = 0
+
         var sampleIndex = 0
         var soundCycleOffset = 0.0
 
         for (i in 0 until SAMPLES_PER_FRAME) {
             // このサンプルのタイミング（サウンドサイクル単位）
-            // 最適化: 加算のみで計算（乗算を削減）
             val sampleSoundCycle = currentFrameStart + soundCycleOffset
             soundCycleOffset += soundCyclesPerSample
+
+            // このサンプルの終端タイミング（フレーム先頭からの相対半サウンドサイクル）
+            // 「終端」を使うことで最終サンプルの直前まで書き込まれた NR50/NR51 が漏れなく適用される
+            val sampleEndRelHalf = (i + 1).toLong() * halfCyclesPerFrame / SAMPLES_PER_FRAME
+
+            // このサンプルの終端より前に書き込まれた NR50/NR51 を時系列順に適用
+            // 1-bit PCM では NR50 が ~8kHz で切り替わるため、サンプルごとに確認が必要
+            while (pcmWritePtr < pcmWriteCount &&
+                pcmWriteRelHalfCycles[pcmWritePtr] < sampleEndRelHalf
+            ) {
+                val wrOffset = pcmWriteOffsets[pcmWritePtr]
+                if (wrOffset == 0x14) currentNr50 = pcmWriteValues[pcmWritePtr]
+                else if (wrOffset == 0x15) currentNr51 = pcmWriteValues[pcmWritePtr]
+                pcmWritePtr++
+            }
+
+            // NR50/NR51 から現サンプルのボリュームとチャンネルルーティングを取得
+            // NR51: Bit 7-4 = SO2(左チャンネル), Bit 3-0 = SO1(右チャンネル)
+            val leftVolume = (currentNr50.toInt() shr 4) and 0x07 // 0=ミュート, 7=最大
+            val rightVolume = currentNr50.toInt() and 0x07
+            val nr51Int = currentNr51.toInt()
+            val square1Left = (nr51Int and 0x10) != 0
+            val square1Right = (nr51Int and 0x01) != 0
+            val square2Left = (nr51Int and 0x20) != 0
+            val square2Right = (nr51Int and 0x02) != 0
+            val waveLeft = (nr51Int and 0x40) != 0
+            val waveRight = (nr51Int and 0x04) != 0
+            val noiseLeft = (nr51Int and 0x80) != 0
+            val noiseRight = (nr51Int and 0x08) != 0
+
+            // スキャンラインPCM: CH1トリガーログをリプレイして現サンプルの音量を決定。
+            // pace=0（凍結）の場合はトリガー時の音量を優先する。
+            // pace>0（減衰）の場合は現在のエンベロープ音量が低ければそちらを使う（減衰を尊重）。
+            while (sq1TriggerPtr < sq1TriggerCount &&
+                sq1TriggerRelHalfCycles[sq1TriggerPtr] < sampleEndRelHalf
+            ) {
+                val triggerVol = sq1TriggerVolumes[sq1TriggerPtr]
+                val nr12period = soundRegs[0x02].toInt() and 0x07
+                currentSq1Volume = if (nr12period > 0 && square1State.envelopeVolume < triggerVol) {
+                    square1State.envelopeVolume
+                } else {
+                    triggerVol
+                }
+                sq1TriggerPtr++
+            }
+            // CH2
+            while (sq2TriggerPtr < sq2TriggerCount &&
+                sq2TriggerRelHalfCycles[sq2TriggerPtr] < sampleEndRelHalf
+            ) {
+                val triggerVol = sq2TriggerVolumes[sq2TriggerPtr]
+                val nr22period = soundRegs[0x07].toInt() and 0x07
+                currentSq2Volume = if (nr22period > 0 && square2State.envelopeVolume < triggerVol) {
+                    square2State.envelopeVolume
+                } else {
+                    triggerVol
+                }
+                sq2TriggerPtr++
+            }
 
             // 各チャンネルからサンプルを生成
             // オーバーフローを防ぐため、Long型で累積してからクリップ
@@ -641,14 +765,14 @@ class Sound {
 
             // Square 1チャンネル
             if (square1Enabled) {
-                val square1Sample = generateSquare1Sample(soundCyclesPerSample)
+                val square1Sample = generateSquare1Sample(soundCyclesPerSample, currentSq1Volume)
                 if (square1Left) leftMixed += square1Sample
                 if (square1Right) rightMixed += square1Sample
             }
 
             // Square 2チャンネル
             if (square2Enabled) {
-                val square2Sample = generateSquare2Sample(soundCyclesPerSample)
+                val square2Sample = generateSquare2Sample(soundCyclesPerSample, currentSq2Volume)
                 if (square2Left) leftMixed += square2Sample
                 if (square2Right) rightMixed += square2Sample
             }
@@ -668,19 +792,13 @@ class Sound {
             }
 
             // マスターボリュームを適用
-            // NR50のボリューム（0-7）: 0=ミュート、7=最大
-            // 実機の仕様: ボリュームは出力アンプのゲインを表す
-            // ボリューム0 = ミュート、ボリューム7 = 最大
-            // 各チャンネルは既に適切にスケールされているため、
-            // マスターボリュームは (volume + 1) / 8 の係数で適用
-            // オーバーフロー対策: 既に各チャンネルで1/4スケール済みと仮定
-            leftMixed = (leftMixed * (leftVolume + 1)) / 8
-            rightMixed = (rightMixed * (rightVolume + 1)) / 8
+            // 実機仕様: vol=0 は完全無音、vol=7 は最大出力。volume/7 で線形スケール。
+            // （旧式の (volume+1)/8 は vol=0 でも 12.5% 出力が残り、1-bit PCM の
+            //   OFF 状態を正しく再現できなかった）
+            leftMixed = if (leftVolume == 0) 0L else leftMixed * leftVolume / 7
+            rightMixed = if (rightVolume == 0) 0L else rightMixed * rightVolume / 7
 
-            // Vin入力は実機では通常使用されないため、処理をスキップ（最適化）
-
-            // ステレオ出力（左右を別々に出力）
-            // 最適化: coerceInの結果を直接使用
+            // ステレオ出力（左右交互）
             val leftSample =
                 when {
                     leftMixed < -32768L -> -32768
@@ -694,10 +812,15 @@ class Sound {
                     else -> rightMixed.toInt()
                 }.toShort()
 
-            // ステレオ形式（左右交互）で出力
             samples[sampleIndex++] = leftSample
             samples[sampleIndex++] = rightSample
         }
+
+        // フレーム終了時に書き込みログとフレーム内カウンタをリセット
+        pcmWriteCount = 0
+        sq1TriggerCount = 0
+        sq2TriggerCount = 0
+        frameHalfCycles = 0L
 
         return samples
     }
@@ -707,7 +830,7 @@ class Sound {
      *
      * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
      */
-    private fun generateSquare1Sample(soundCyclesPerSample: Double): Int {
+    private fun generateSquare1Sample(soundCyclesPerSample: Double, volumeOverride: Int = -1): Int {
         // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
         if (!square1State.enabled) {
             return 0
@@ -731,8 +854,11 @@ class Sound {
                 // スイープが有効な場合、shadowFrequencyを使用
                 shadowFrequency
             }
-        // 周波数が0または2048以上の場合、無効
-        if (frequency == 0 || frequency >= 2048) {
+        // 2048以上は無効（11bit値なので実際には到達しないが念のため）
+        // 周波数0は有効: period=8192サウンドサイクルの極低周波矩形波として動作。
+        // スキャンラインPCM技法では毎スキャンラインでトリガーするため、常にdutyパターンの
+        // 先頭（High状態）に留まり、実質的にDACとして機能する。
+        if (frequency >= 2048) {
             return 0
         }
 
@@ -766,11 +892,13 @@ class Sound {
                 else -> 0b00000001
             }
 
-        // エンベロープボリュームを使用
-        // 実機では、エンベロープのボリュームが0でも、チャンネルは有効のまま
-        // ただし、サンプル生成時にボリュームが0の場合は、無音を返す
-        val volume = square1State.envelopeVolume
+        // エンベロープボリュームを使用（スキャンラインPCMではオーバーライド値を優先）
+        val volume = if (volumeOverride >= 0) volumeOverride else square1State.envelopeVolume
         if (volume == 0) {
+            square1State.phaseAccumulator += soundCyclesPerSample
+            if (square1State.phaseAccumulator >= period) {
+                square1State.phaseAccumulator %= period
+            }
             return 0
         }
 
@@ -790,7 +918,7 @@ class Sound {
      *
      * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
      */
-    private fun generateSquare2Sample(soundCyclesPerSample: Double): Int {
+    private fun generateSquare2Sample(soundCyclesPerSample: Double, volumeOverride: Int = -1): Int {
         // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
         if (!square2State.enabled) {
             return 0
@@ -802,7 +930,8 @@ class Sound {
 
         // 周波数を計算
         val frequency = ((nr24.toInt() and 0x07) shl 8) or nr23.toInt()
-        if (frequency == 0 || frequency >= 2048) {
+        // 2048以上は無効。周波数0はSquare1と同様に許可（スキャンラインPCM対応）。
+        if (frequency >= 2048) {
             return 0
         }
 
@@ -834,11 +963,13 @@ class Sound {
                 else -> 0b00000001
             }
 
-        // エンベロープボリュームを使用
-        // 実機では、エンベロープのボリュームが0でも、チャンネルは有効のまま
-        // ただし、サンプル生成時にボリュームが0の場合は、無音を返す
-        val volume = square2State.envelopeVolume
+        // エンベロープボリュームを使用（スキャンラインPCMではオーバーライド値を優先）
+        val volume = if (volumeOverride >= 0) volumeOverride else square2State.envelopeVolume
         if (volume == 0) {
+            square2State.phaseAccumulator += soundCyclesPerSample
+            if (square2State.phaseAccumulator >= period) {
+                square2State.phaseAccumulator %= period
+            }
             return 0
         }
 

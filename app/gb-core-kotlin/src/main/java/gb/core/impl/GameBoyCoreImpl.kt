@@ -38,7 +38,29 @@ class GameBoyCoreImpl : GameBoyCore {
         this.rom = romCopy
         frameIndex = 0
 
-        // Machine（CPU + SystemBus + Timer + Interrupts + MBC1）を初期化
+        // カートリッジヘッダをログ出力（診断用）
+        val cartType = rom.getOrNull(0x0147)?.toInt() ?: 0
+        val romSizeCode = rom.getOrNull(0x0148)?.toInt() ?: 0
+        val ramSizeCode = rom.getOrNull(0x0149)?.toInt() ?: 0
+        val title = buildString {
+            for (i in 0x0134..0x0143) {
+                val c = rom.getOrNull(i)?.toInt()?.and(0xFF) ?: 0
+                if (c == 0) break
+                append(c.toChar())
+            }
+        }
+        val supportedTypes = listOf(0x00, 0x01, 0x02, 0x03, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E)
+        val supported = cartType in supportedTypes
+        android.util.Log.w(
+            "GameBoyCore",
+            "ROM loaded: title='$title' size=${rom.size}B " +
+                "cartType=0x${cartType.toString(16)} " +
+                "romSizeCode=0x${romSizeCode.toString(16)} " +
+                "ramSizeCode=0x${ramSizeCode.toString(16)} " +
+                "supported=$supported",
+        )
+
+        // Machine（CPU + SystemBus + Timer + Interrupts + MBC）を初期化
         val uRom = romCopy.toUByteArray()
         machine = Machine(uRom)
 
@@ -168,6 +190,9 @@ class GameBoyCoreImpl : GameBoyCore {
                         // IF/IEレジスタの状態も確認
                         val ifReg = m.readIf().toString(16)
                         val ieReg = m.readIe().toString(16)
+                        val statReg = m.ppu.readRegister(0x01).toString(16)
+                        val lycReg = m.ppu.readRegister(0x05).toString(16)
+                        val lyReg = m.ppu.readRegister(0x04).toString(16)
                         android.util.Log.e(
                             "GameBoyCore",
                             "PC stuck at 0x${currentPc.toString(16)} for $pcStuckCount instructions. " +
@@ -181,7 +206,8 @@ class GameBoyCoreImpl : GameBoyCore {
                                 "SP=0x${m.cpu.registers.sp.toString(16)}, " +
                                 "Z=${m.cpu.registers.flagZ}, C=${m.cpu.registers.flagC}, " +
                                 "halted=${m.cpu.isHalted()}, IME=${m.cpu.isInterruptsEnabled()}, " +
-                                "IF=0x$ifReg, IE=0x$ieReg",
+                                "IF=0x$ifReg, IE=0x$ieReg, " +
+                                "STAT=0x$statReg, LYC=0x$lycReg, LY=0x$lyReg",
                         )
                     }
                     // HALT状態の場合は、割り込み待ちの可能性があるため、ループを続行
@@ -203,19 +229,33 @@ class GameBoyCoreImpl : GameBoyCore {
 
             val pixels = m.ppu.renderFrame()
             val audioSamples = m.sound.generateSamples()
-            // 最適化: ログ出力をさらに削減（3000フレームごと = 約50秒ごと）
-            if (frameIndex % 3000 == 1L) {
-                // PCの値を確認（CPUが進んでいるか）
+            // 診断ログ: 60フレームごと（約1秒ごと）
+            if (frameIndex % 60 == 1L) {
                 val pc = m.cpu.registers.pc
                 val ifReg = m.readIf()
                 val ieReg = m.readIe()
+                val lcdc = m.ppu.readRegister(0x00)
+                val ly = m.ppu.readRegister(0x04)
+                val stat = m.ppu.readRegister(0x01)
+                val lyc = m.ppu.readRegister(0x05)
+                // フレームに非白・非黒以外のピクセルが含まれるか確認
+                val nonTrivialPixels = pixels.count { it != 0xFFFFFFFF.toInt() && it != 0xFF000000.toInt() }
+                // サウンド診断: NR52/NR50/NR51 とサンプル最大振幅
+                val nr52 = m.sound.readRegister(0x16)
+                val nr50 = m.sound.readRegister(0x14)
+                val nr51 = m.sound.readRegister(0x15)
+                val maxAmp = audioSamples.maxOfOrNull { kotlin.math.abs(it.toInt()) } ?: 0
                 android.util.Log.d(
                     "GameBoyCore",
-                    "Frame $frameIndex: cycles=$accumulatedCycles, instructions=$instructionCount, " +
-                        "PC=0x${pc.toString(16)}, A=0x${m.cpu.registers.a.toString(16)}, " +
-                        "IF=0x${ifReg.toString(16)}, IE=0x${ieReg.toString(16)}, " +
-                        "IME=${m.cpu.isInterruptsEnabled()}, halted=${m.cpu.isHalted()}",
+                    "Frame $frameIndex: cycles=$accumulatedCycles inst=$instructionCount " +
+                        "PC=0x${pc.toString(16)} LCDC=0x${lcdc.toString(16)} LY=$ly " +
+                        "STAT=0x${stat.toString(16)} LYC=$lyc " +
+                        "IF=0x${ifReg.toString(16)} IE=0x${ieReg.toString(16)} " +
+                        "IME=${m.cpu.isInterruptsEnabled()} halt=${m.cpu.isHalted()} " +
+                        "grayPx=$nonTrivialPixels " +
+                        "NR52=0x${nr52.toString(16)} NR50=0x${nr50.toString(16)} NR51=0x${nr51.toString(16)} maxAmp=$maxAmp",
                 )
+                android.util.Log.d("SoundDbg", m.sound.getDebugState())
             }
 
             val stats =

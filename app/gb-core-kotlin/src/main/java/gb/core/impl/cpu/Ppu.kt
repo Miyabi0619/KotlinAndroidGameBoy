@@ -70,6 +70,11 @@ class Ppu(
     private var modeCycles: Int = 0 // 現在のモード内の累積サイクル数
     private var mode3Duration: Int = 172 // 現在のスキャンラインのMode 3の長さ（可変）
 
+    // STAT 割り込み信号線の前回状態（エッジ検出用）
+    // 実機 GB では HBlank/OAM/VBlank/LYC=LY の各ソースを OR 合成した
+    // 1 本の信号線の "立ち上がりエッジ" でのみ LCD_STAT 割り込みが発火する。
+    private var statInterruptLine: Boolean = false
+
     // スキャンラインごとのSCX/SCYスナップショット（ラスタースクロール対応）
     // 各スキャンラインのMode 2（OAM Search）開始時にキャプチャする
     private val scanlineScx = IntArray(SCREEN_HEIGHT)
@@ -112,7 +117,9 @@ class Ppu(
             0x01 -> {
                 // 0xFF41 (STAT): 現在のモードとLYC=LYフラグを反映
                 val currentModeBits = currentMode.value.toUByte()
-                val lycMatchBit = if (ly == lyc) 0x04u.toUByte() else 0x00u.toUByte()
+                // LYC=LY フラグも updateStatInterruptLine() と同じラップアラウンド判定を使用
+                val lycEffective = lyc.toInt().let { if (it >= TOTAL_SCANLINES) it % TOTAL_SCANLINES else it }
+                val lycMatchBit = if (ly.toInt() == lycEffective) 0x04u.toUByte() else 0x00u.toUByte()
                 // 下位3bit（モード、LYC=LY）は読み取り専用、上位5bitは書き込み可能
                 val statUpper = stat and 0xF8u.toUByte()
                 val result = (statUpper.toInt() or currentModeBits.toInt() or lycMatchBit.toInt()) and 0xFF
@@ -211,6 +218,13 @@ class Ppu(
 
             0x05 -> {
                 lyc = value
+                // LYC 書き込み時に STAT 信号線を即時再評価する。
+                // LYC が変わると LYC=LY 条件が成立/不成立に切り替わるため、
+                // モード遷移を待たずに信号を更新しないと以下の問題が生じる:
+                // ① 前のLYC=LY でHIGH→新LYCに書き換え→LY が新LYC に到達しても
+                //    信号がすでにHIGHのためエッジ未検出→STAT が1フレーム遅れる
+                // ② LYC=LY が成立した瞬間に STAT を即発火させる（一部ゲームの期待動作）
+                updateStatInterruptLine()
             }
 
             // 0xFF45
@@ -283,6 +297,9 @@ class Ppu(
             scanlineCycles = 0
             previousLy = 0u
             ly = 0u
+            // LCD無効中は STAT 信号線も LOW にリセット
+            // これにより LCD 再有効化後、最初の条件成立でエッジ検出が正しく動作する
+            statInterruptLine = false
             return
         }
 
@@ -295,25 +312,28 @@ class Ppu(
                 previousLy = ly
                 ly = ((ly.toInt() + 1) % TOTAL_SCANLINES).toUByte()
 
-                // LYC比較のチェック
-                checkLycMatch()
-
                 if (ly.toInt() < SCREEN_HEIGHT) {
                     // 次のスキャンライン開始（Mode 2）- SCX/SCYをキャプチャ（ラスタースクロール対応）
                     scanlineScx[ly.toInt()] = scx.toInt()
                     scanlineScy[ly.toInt()] = scy.toInt()
                     setMode(PpuMode.OAM_SEARCH)
+                    // LYC=LY チェック（新しい LY 値で判定）
+                    updateStatInterruptLine()
                 } else if (ly == 144u.toUByte()) {
                     // VBlank開始（Mode 1）
                     setMode(PpuMode.VBLANK)
                     interruptController.request(InterruptController.Type.VBLANK)
-                    checkStatInterrupt(PpuMode.VBLANK)
-                    checkLycMatch()
+                    // LYC=LY チェックを含む STAT 信号更新
+                    updateStatInterruptLine()
                 } else if (ly == 0u.toUByte()) {
                     // VBlank終了、次のフレーム開始（Mode 2）- スキャンライン0のSCX/SCYをキャプチャ
                     scanlineScx[0] = scx.toInt()
                     scanlineScy[0] = scy.toInt()
                     setMode(PpuMode.OAM_SEARCH)
+                    updateStatInterruptLine()
+                } else {
+                    // VBlank 中の残りスキャンライン（LY=145〜153）の LYC=LY チェック
+                    updateStatInterruptLine()
                 }
             }
 
@@ -342,8 +362,8 @@ class Ppu(
                     // Mode 3: Pixel Transfer（172-289サイクル、スプライト数/SCX/ウィンドウにより可変）
                     if (modeCycles >= mode3Duration) {
                         setMode(PpuMode.HBLANK)
-                        // HBlank割り込みのチェック
-                        checkStatInterrupt(PpuMode.HBLANK)
+                        // Mode 3 → HBlank 遷移: 信号線更新（HBlank 条件が新たに真になれば発火）
+                        updateStatInterruptLine()
                     }
                 }
 
@@ -361,49 +381,51 @@ class Ppu(
     }
 
     /**
-     * PPUモードを設定し、必要に応じて割り込みを発生させる。
+     * PPUモードを設定する。
+     *
+     * STAT 割り込みのチェックは呼び出し側で updateStatInterruptLine() を呼ぶことで行う。
+     * OAM_SEARCH/HBLANK/VBLANK への遷移時は setMode() の後に updateStatInterruptLine() を呼ぶこと。
+     * PIXEL_TRANSFER への遷移時は setMode() の中で updateStatInterruptLine() を呼ぶ。
+     * （PIXEL_TRANSFER 中も LYC=LY が成立すれば信号は high のまま維持される）
      */
     private fun setMode(newMode: PpuMode) {
         if (currentMode != newMode) {
             currentMode = newMode
             modeCycles = 0
-
-            // Mode 2（OAM Search）割り込みのチェック
-            if (newMode == PpuMode.OAM_SEARCH) {
-                checkStatInterrupt(PpuMode.OAM_SEARCH)
+            // PIXEL_TRANSFER 遷移時: LYC=LY 以外のソースが全てなくなるので信号を再評価。
+            // LYC=LY が成立していれば信号は high のまま（reset しない）。
+            if (newMode == PpuMode.PIXEL_TRANSFER) {
+                updateStatInterruptLine()
             }
         }
     }
 
     /**
-     * STAT割り込みをチェックし、条件が満たされていれば発生させる。
+     * STAT 割り込み信号線の現在値を計算し、立ち上がりエッジがあれば LCD_STAT 割り込みを発火する。
+     *
+     * 実機 GB では、以下の 4 ソースを OR 合成した 1 本の信号線の
+     * "立ち上がりエッジ（0→1）" でのみ割り込みが発生する:
+     *   - bit3: HBlank（Mode 0）中かつ STAT bit3 = 1
+     *   - bit4: VBlank（Mode 1）中かつ STAT bit4 = 1
+     *   - bit5: OAM Search（Mode 2）中かつ STAT bit5 = 1
+     *   - bit6: LYC=LY かつ STAT bit6 = 1
      */
-    private fun checkStatInterrupt(mode: PpuMode) {
-        val modeBit =
-            when (mode) {
-                PpuMode.HBLANK -> 3
-                PpuMode.VBLANK -> 4
-                PpuMode.OAM_SEARCH -> 5
-                PpuMode.PIXEL_TRANSFER -> return // Mode 3では割り込みは発生しない
-            }
+    private fun updateStatInterruptLine() {
+        val s = stat.toInt()
+        // LYC=LY 比較: LYC が有効範囲（0-153）を超えた場合は TOTAL_SCANLINES でラップする。
+        // BAD APPLE!! など LYC を 0-153 を超えてインクリメントしてフレームをまたぐ場合、
+        // 実機相当の挙動として LYC mod 154 == LY で判定する。
+        val lycEffective = lyc.toInt().let { if (it >= TOTAL_SCANLINES) it % TOTAL_SCANLINES else it }
+        val newLine =
+            ((s and 0x08) != 0 && currentMode == PpuMode.HBLANK) ||
+                ((s and 0x10) != 0 && currentMode == PpuMode.VBLANK) ||
+                ((s and 0x20) != 0 && currentMode == PpuMode.OAM_SEARCH) ||
+                ((s and 0x40) != 0 && ly.toInt() == lycEffective)
 
-        val interruptEnabled = (stat.toInt() and (1 shl modeBit)) != 0
-        if (interruptEnabled) {
+        if (newLine && !statInterruptLine) {
             interruptController.request(InterruptController.Type.LCD_STAT)
         }
-    }
-
-    /**
-     * LYC=LY比較をチェックし、条件が満たされていれば割り込みを発生させる。
-     */
-    private fun checkLycMatch() {
-        if (ly == lyc) {
-            // LYC=LY割り込みのチェック（STAT bit 6）
-            val interruptEnabled = (stat.toInt() and 0x40) != 0
-            if (interruptEnabled) {
-                interruptController.request(InterruptController.Type.LCD_STAT)
-            }
-        }
+        statInterruptLine = newLine
     }
 
     /**
@@ -466,6 +488,15 @@ class Ppu(
         if (debugMode) {
             // テスト描画: チェッカーボードパターンで PPU が正しく動作しているか確認
             return renderTestPattern()
+        }
+
+        // scanlineScx/Scy は step() 経由のみ更新されるため、
+        // step() を経由せずに呼ばれた場合（ユニットテスト等）は現在の scx/scy で全行を初期化する
+        val currentScx = scx.toInt()
+        val currentScy = scy.toInt()
+        for (i in 0 until SCREEN_HEIGHT) {
+            if (scanlineScx[i] == 0 && currentScx != 0) scanlineScx[i] = currentScx
+            if (scanlineScy[i] == 0 && currentScy != 0) scanlineScy[i] = currentScy
         }
 
         // LCDC.7 (LCD Enable) が 0 の場合は、画面を白で塗りつぶす
