@@ -22,9 +22,9 @@ class Mbc5(
     private val ramSize: Int,
 ) {
     private var ramEnabled: Boolean = false
-    private var romBankLow8: Int = 1  // ROM バンク番号 下位 8 ビット（デフォルト 1）
+    private var romBankLow8: Int = 1 // ROM バンク番号 下位 8 ビット（デフォルト 1）
     private var romBankHigh1: Int = 0 // ROM バンク番号 bit 8
-    private var ramBank: Int = 0      // RAM バンク番号（0-0x0F）
+    private var ramBank: Int = 0 // RAM バンク番号（0-0x0F）
 
     /** 0x000-0x7FFF への書き込みで MBC レジスタを更新する。 */
     fun writeControl(
@@ -69,4 +69,3 @@ class Mbc5(
         return if (index in 0 until ramSize) index else null
     }
 }
-
