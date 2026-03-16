@@ -180,7 +180,7 @@ class Machine(
         val ramSizeBytes =
             when (ramSizeCode) {
                 0x00 -> 0
-                0x01 -> 0x800  // 2KB
+                0x01 -> 0x800 // 2KB
                 0x02 -> 0x2000 // 8KB
                 0x03 -> 0x8000 // 32KB (4 banks)
                 0x04 -> 0x20000 // 128KB

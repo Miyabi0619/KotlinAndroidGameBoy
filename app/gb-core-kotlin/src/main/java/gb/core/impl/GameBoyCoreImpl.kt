@@ -42,13 +42,14 @@ class GameBoyCoreImpl : GameBoyCore {
         val cartType = rom.getOrNull(0x0147)?.toInt() ?: 0
         val romSizeCode = rom.getOrNull(0x0148)?.toInt() ?: 0
         val ramSizeCode = rom.getOrNull(0x0149)?.toInt() ?: 0
-        val title = buildString {
-            for (i in 0x0134..0x0143) {
-                val c = rom.getOrNull(i)?.toInt()?.and(0xFF) ?: 0
-                if (c == 0) break
-                append(c.toChar())
+        val title =
+            buildString {
+                for (i in 0x0134..0x0143) {
+                    val c = rom.getOrNull(i)?.toInt()?.and(0xFF) ?: 0
+                    if (c == 0) break
+                    append(c.toChar())
+                }
             }
-        }
         val supportedTypes = listOf(0x00, 0x01, 0x02, 0x03, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E)
         val supported = cartType in supportedTypes
         android.util.Log.w(

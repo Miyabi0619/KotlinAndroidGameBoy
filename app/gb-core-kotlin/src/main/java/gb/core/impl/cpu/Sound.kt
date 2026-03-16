@@ -114,10 +114,10 @@ class Sound {
     // 絶対カウンタ (halfSoundCycleCounter) を使うと割り込みオーバーヘッド等で
     // フレームをまたぐ drift が蓄積し、書き込みが全サンプルで無視される不具合が生じる。
     private val pcmWriteRelHalfCycles = LongArray(512) // フレーム先頭からの経過半サウンドサイクル
-    private val pcmWriteOffsets = IntArray(512)         // レジスタオフセット (0x14=NR50 / 0x15=NR51)
-    private val pcmWriteValues = UByteArray(512)        // 書き込まれた値
-    private var pcmWriteCount = 0                       // 今フレームの書き込み数
-    private var frameHalfCycles: Long = 0L              // フレーム内経過半サウンドサイクル（毎フレームリセット）
+    private val pcmWriteOffsets = IntArray(512) // レジスタオフセット (0x14=NR50 / 0x15=NR51)
+    private val pcmWriteValues = UByteArray(512) // 書き込まれた値
+    private var pcmWriteCount = 0 // 今フレームの書き込み数
+    private var frameHalfCycles: Long = 0L // フレーム内経過半サウンドサイクル（毎フレームリセット）
 
     // スキャンラインPCM: CH1/CH2 のトリガーイベントをタイムスタンプ付きで記録する。
     // ゲームが毎スキャンライン NR12(音量) + NR14(トリガー) を書き込む手法で
@@ -710,8 +710,11 @@ class Sound {
                 pcmWriteRelHalfCycles[pcmWritePtr] < sampleEndRelHalf
             ) {
                 val wrOffset = pcmWriteOffsets[pcmWritePtr]
-                if (wrOffset == 0x14) currentNr50 = pcmWriteValues[pcmWritePtr]
-                else if (wrOffset == 0x15) currentNr51 = pcmWriteValues[pcmWritePtr]
+                if (wrOffset == 0x14) {
+                    currentNr50 = pcmWriteValues[pcmWritePtr]
+                } else if (wrOffset == 0x15) {
+                    currentNr51 = pcmWriteValues[pcmWritePtr]
+                }
                 pcmWritePtr++
             }
 
@@ -737,11 +740,12 @@ class Sound {
             ) {
                 val triggerVol = sq1TriggerVolumes[sq1TriggerPtr]
                 val nr12period = soundRegs[0x02].toInt() and 0x07
-                currentSq1Volume = if (nr12period > 0 && square1State.envelopeVolume < triggerVol) {
-                    square1State.envelopeVolume
-                } else {
-                    triggerVol
-                }
+                currentSq1Volume =
+                    if (nr12period > 0 && square1State.envelopeVolume < triggerVol) {
+                        square1State.envelopeVolume
+                    } else {
+                        triggerVol
+                    }
                 sq1TriggerPtr++
             }
             // CH2
@@ -750,11 +754,12 @@ class Sound {
             ) {
                 val triggerVol = sq2TriggerVolumes[sq2TriggerPtr]
                 val nr22period = soundRegs[0x07].toInt() and 0x07
-                currentSq2Volume = if (nr22period > 0 && square2State.envelopeVolume < triggerVol) {
-                    square2State.envelopeVolume
-                } else {
-                    triggerVol
-                }
+                currentSq2Volume =
+                    if (nr22period > 0 && square2State.envelopeVolume < triggerVol) {
+                        square2State.envelopeVolume
+                    } else {
+                        triggerVol
+                    }
                 sq2TriggerPtr++
             }
 
@@ -830,7 +835,10 @@ class Sound {
      *
      * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
      */
-    private fun generateSquare1Sample(soundCyclesPerSample: Double, volumeOverride: Int = -1): Int {
+    private fun generateSquare1Sample(
+        soundCyclesPerSample: Double,
+        volumeOverride: Int = -1,
+    ): Int {
         // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
         if (!square1State.enabled) {
             return 0
@@ -918,7 +926,10 @@ class Sound {
      *
      * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
      */
-    private fun generateSquare2Sample(soundCyclesPerSample: Double, volumeOverride: Int = -1): Int {
+    private fun generateSquare2Sample(
+        soundCyclesPerSample: Double,
+        volumeOverride: Int = -1,
+    ): Int {
         // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
         if (!square2State.enabled) {
             return 0

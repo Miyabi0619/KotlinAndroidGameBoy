@@ -18,6 +18,7 @@ class Mbc3(
 
     // ラッチされた RTC 値（0=S, 1=M, 2=H, 3=DL, 4=DH）
     private val rtcLatched = IntArray(5) { 0 }
+
     // 書き込み可能な RTC 値
     private val rtcWritable = IntArray(5) { 0 }
     private var latchPrepared: Boolean = false
@@ -41,10 +42,11 @@ class Mbc3(
                 // ラッチクロック: 0x00 の後に 0x01 で現在の RTC 値をラッチ
                 when (v and 0x01) {
                     0 -> latchPrepared = true
-                    1 -> if (latchPrepared) {
-                        rtcWritable.copyInto(rtcLatched)
-                        latchPrepared = false
-                    }
+                    1 ->
+                        if (latchPrepared) {
+                            rtcWritable.copyInto(rtcLatched)
+                            latchPrepared = false
+                        }
                 }
             }
         }

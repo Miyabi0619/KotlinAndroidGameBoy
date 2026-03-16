@@ -21,8 +21,11 @@ class GameLoop(
      * ROM をロードしてコアをリセットするヘルパー。
      */
     fun loadRomAndReset(rom: ByteArray): CoreResult<Unit> {
-        android.util.Log.w("GameLoop", "loadRomAndReset called: romSize=${rom.size}B " +
-            "cartType=0x${(rom.getOrNull(0x0147)?.toInt() ?: 0).toString(16)}")
+        android.util.Log.w(
+            "GameLoop",
+            "loadRomAndReset called: romSize=${rom.size}B " +
+                "cartType=0x${(rom.getOrNull(0x0147)?.toInt() ?: 0).toString(16)}",
+        )
         val loadResult = core.loadRom(rom)
         if (loadResult is CoreResult.Error) {
             android.util.Log.e("GameLoop", "loadRom failed: $loadResult")

@@ -426,7 +426,7 @@ class PpuTest {
         )
 
         // 次のスキャンラインでもう一度 PIXEL_TRANSFER → HBLANK で発火することを確認
-        ppu.step(80)  // OAM→PIXEL_TRANSFER（信号 low）
+        ppu.step(80) // OAM→PIXEL_TRANSFER（信号 low）
         ppu.step(172) // PIXEL_TRANSFER→HBLANK（信号 0→1 → 発火）
 
         val thirdInterrupt = ic.nextPending(imeEnabled = true)
