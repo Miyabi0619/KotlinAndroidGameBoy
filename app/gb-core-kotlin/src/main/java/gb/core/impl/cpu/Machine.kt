@@ -60,12 +60,14 @@ class Machine(
         timer.step(cycles)
         ppu.step(cycles)
         sound.step(cycles, timer.getDivInternalCounter())
+        bus.stepDma(cycles)
 
         val interruptCycles = handleInterrupts()
         if (interruptCycles > 0) {
             timer.step(interruptCycles)
             ppu.step(interruptCycles)
             sound.step(interruptCycles, timer.getDivInternalCounter())
+            bus.stepDma(interruptCycles)
         }
 
         return cycles + interruptCycles
@@ -118,7 +120,7 @@ class Machine(
                 else -> false
             }
 
-        val (mbc1, mbc3, cartridgeRam) = createMbcAndRamIfNeeded(rom)
+        val mbcResult = createMbcAndRamIfNeeded(rom)
         val vram = UByteArray(0x2000) { 0u }
         val oam = UByteArray(0xA0) { 0u }
         ppu = Ppu(vram, oam, interruptController)
@@ -127,11 +129,12 @@ class Machine(
                 rom = rom,
                 vram = vram,
                 oam = oam,
-                cartridgeRam = cartridgeRam,
+                cartridgeRam = mbcResult.ram,
                 interruptController = interruptController,
                 timer = timer,
-                mbc1 = mbc1,
-                mbc3 = mbc3,
+                mbc1 = mbcResult.mbc1,
+                mbc3 = mbcResult.mbc3,
+                mbc5 = mbcResult.mbc5,
                 joypad = joypad,
                 ppu = ppu,
                 sound = sound,
@@ -149,9 +152,11 @@ class Machine(
         cpu.registers.hl = 0x014Du.toUShort()
     }
 
-    private fun createMbcAndRamIfNeeded(rom: UByteArray): Triple<Mbc1?, Mbc3?, UByteArray?> {
+    private class MbcResult(val mbc1: Mbc1?, val mbc3: Mbc3?, val mbc5: Mbc5?, val ram: UByteArray?)
+
+    private fun createMbcAndRamIfNeeded(rom: UByteArray): MbcResult {
         if (rom.isEmpty()) {
-            return Triple(null, null, null)
+            return MbcResult(null, null, null, null)
         }
 
         val cartridgeType = rom.getOrNull(0x0147)?.toInt() ?: 0
@@ -163,6 +168,11 @@ class Machine(
         val hasMbc3 =
             when (cartridgeType) {
                 0x0F, 0x10, 0x11, 0x12, 0x13 -> true
+                else -> false
+            }
+        val hasMbc5 =
+            when (cartridgeType) {
+                0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E -> true
                 else -> false
             }
 
@@ -178,12 +188,13 @@ class Machine(
                 else -> 0
             }
 
-        val needsRam = (hasMbc1 || hasMbc3) && ramSizeBytes > 0
+        val needsRam = (hasMbc1 || hasMbc3 || hasMbc5) && ramSizeBytes > 0
         val cartridgeRam = if (needsRam) UByteArray(ramSizeBytes) { 0u } else null
 
         val mbc1 = if (hasMbc1) Mbc1(romSize = rom.size, ramSize = ramSizeBytes) else null
         val mbc3 = if (hasMbc3) Mbc3(romSize = rom.size, ramSize = ramSizeBytes) else null
+        val mbc5 = if (hasMbc5) Mbc5(romSize = rom.size, ramSize = ramSizeBytes) else null
 
-        return Triple(mbc1, mbc3, cartridgeRam)
+        return MbcResult(mbc1, mbc3, mbc5, cartridgeRam)
     }
 }

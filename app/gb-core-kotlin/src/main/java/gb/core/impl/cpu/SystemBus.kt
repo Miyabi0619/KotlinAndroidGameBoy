@@ -42,6 +42,8 @@ class SystemBus(
     private val mbc1: Mbc1? = null,
     /** ROM が MBC3 カートリッジであれば Mbc3 インスタンスを渡す。 */
     private val mbc3: Mbc3? = null,
+    /** ROM が MBC5 カートリッジであれば Mbc5 インスタンスを渡す。 */
+    private val mbc5: Mbc5? = null,
 ) : Bus {
     /** Joypad 入力レジスタ（FF00）は [joypad] に委譲する。 */
     private val joypad: Joypad = joypad
@@ -62,6 +64,9 @@ class SystemBus(
      * - それ以外は現状 CGB 専用レジスタや未使用領域の簡易バックアップとして扱う
      */
     private val ioRegs: UByteArray = UByteArray(0x30) { 0u }
+
+    /** DMA転送で既にコピー済みのバイト数（0..0xA0）。転送開始時にリセットされる。 */
+    private var dmaBytesTransferred: Int = 0
 
     /**
      * シリアルポートレジスタ（SB/SC）。
@@ -89,11 +94,11 @@ class SystemBus(
     private fun readByteInternal(addr: Int): UByte =
         when {
             addr in 0x0000..0x3FFF -> {
-                val index = mbc1?.mapRom0(addr) ?: mbc3?.mapRom0(addr) ?: addr
+                val index = mbc1?.mapRom0(addr) ?: mbc3?.mapRom0(addr) ?: mbc5?.mapRom0(addr) ?: addr
                 rom.getOrElse(index) { 0xFFu }
             }
             addr in 0x4000..0x7FFF -> {
-                val index = mbc1?.mapRomX(addr) ?: mbc3?.mapRomX(addr) ?: addr
+                val index = mbc1?.mapRomX(addr) ?: mbc3?.mapRomX(addr) ?: mbc5?.mapRomX(addr) ?: addr
                 rom.getOrElse(index) { 0xFFu }
             }
             addr in 0x8000..0x9FFF ->
@@ -107,7 +112,7 @@ class SystemBus(
                     mbc3.readRtc()
                 } else {
                     val ram = cartridgeRam ?: return 0xFFu
-                    val ramIndex = mbc1?.mapRam(addr) ?: mbc3?.mapRam(addr) ?: (addr - 0xA000)
+                    val ramIndex = mbc1?.mapRam(addr) ?: mbc3?.mapRam(addr) ?: mbc5?.mapRam(addr) ?: (addr - 0xA000)
                     if (ramIndex == null || ramIndex !in 0 until ram.size) 0xFFu else ram[ramIndex]
                 }
             }
@@ -171,6 +176,7 @@ class SystemBus(
                 // MBC 制御レジスタ
                 mbc1?.writeControl(addr, value)
                 mbc3?.writeControl(addr, value)
+                mbc5?.writeControl(addr, value)
             }
             in 0x8000..0x9FFF -> {
                 // Mode 3（Pixel Transfer）中は VRAM への CPU アクセスは無視される
@@ -184,7 +190,7 @@ class SystemBus(
                     mbc3.writeRtc(value)
                 } else {
                     val ram = cartridgeRam ?: return
-                    val ramIndex = mbc1?.mapRam(addr) ?: mbc3?.mapRam(addr) ?: (addr - 0xA000)
+                    val ramIndex = mbc1?.mapRam(addr) ?: mbc3?.mapRam(addr) ?: mbc5?.mapRam(addr) ?: (addr - 0xA000)
                     if (ramIndex == null || ramIndex !in 0 until ram.size) return
                     ram[ramIndex] = value
                 }
@@ -242,10 +248,9 @@ class SystemBus(
                 val offset = addr - 0xFF40
                 ppu.writeRegister(offset, value)
 
-                // DMA転送が開始された場合、即座に転送を実行（簡易実装）
-                // 実機では160サイクルかかるが、ここでは即座に完了させる
+                // DMA転送開始: 転送済みカウントをリセットし、stepDma() で段階的にコピーする
                 if (offset == 0x06 && ppu.dmaActive) {
-                    performDmaTransfer(ppu.dmaSourceBase)
+                    dmaBytesTransferred = 0
                 }
             }
             in 0xFF10..0xFF3F -> {
@@ -267,18 +272,20 @@ class SystemBus(
     }
 
     /**
-     * OAM DMA転送を実行する。
+     * OAM DMA転送を段階的に進める。Machine.stepInstruction() から毎命令呼び出す。
      *
-     * - 転送元: [sourceBase] から 160バイト
-     * - 転送先: 0xFE00-0xFE9F (OAM)
-     * - 実機では160サイクルかかるが、ここでは即座に完了させる
+     * - 実機: 160バイト × 4 T-cycles/バイト = 640 T-cycles
+     * - 各呼び出しで [cycles] / 4 バイトずつコピーし、0xA0 バイトで完了
+     * - DMAが非アクティブな場合は何もしない
      */
-    private fun performDmaTransfer(sourceBase: UShort) {
-        val sourceBaseInt = sourceBase.toInt()
-        for (i in 0 until 0xA0) {
-            val sourceAddr = sourceBaseInt + i
-            val byte = readByteInternal(sourceAddr)
-            oam[i] = byte
+    fun stepDma(cycles: Int) {
+        if (!ppu.dmaActive) return
+        val sourceBase = ppu.dmaSourceBase.toInt()
+        val bytesToCopy = cycles / 4
+        val limit = minOf(dmaBytesTransferred + bytesToCopy, 0xA0)
+        for (i in dmaBytesTransferred until limit) {
+            oam[i] = readByteInternal(sourceBase + i)
         }
+        dmaBytesTransferred = limit
     }
 }
