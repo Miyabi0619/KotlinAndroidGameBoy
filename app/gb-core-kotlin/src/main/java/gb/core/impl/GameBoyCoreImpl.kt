@@ -229,6 +229,19 @@ class GameBoyCoreImpl : GameBoyCore {
             frameIndex += 1
 
             val pixels = m.ppu.renderFrame()
+            // 診断ログ: generateSamples() の前にカウンタを読み取る（後では全てリセットされるため）
+            val soundDebug = m.sound.getDebugState()
+            if (frameIndex % 60 == 1L) {
+                android.util.Log.d("SoundDbg", soundDebug)
+            }
+            // 診断ログ: DC バイアスリスク検出（Wave RAM=0xFF + 有効周波数 + Wave ch有効）
+            if (m.sound.hasWaveDcBiasRisk) {
+                android.util.Log.w("SoundDiag", "Frame $frameIndex DC_BIAS_RISK: $soundDebug")
+            }
+            // 診断ログ: Wave channel が有効かつ pcmWrites が多い（1-bit PCM 使用中）の場合は毎フレーム記録
+            if (m.sound.isWaveEnabled && m.sound.currentPcmWriteCount > 50) {
+                android.util.Log.d("SoundDiag", "Frame $frameIndex ACTIVE: $soundDebug")
+            }
             val audioSamples = m.sound.generateSamples()
             // 診断ログ: 60フレームごと（約1秒ごと）
             if (frameIndex % 60 == 1L) {
@@ -256,7 +269,6 @@ class GameBoyCoreImpl : GameBoyCore {
                         "grayPx=$nonTrivialPixels " +
                         "NR52=0x${nr52.toString(16)} NR50=0x${nr50.toString(16)} NR51=0x${nr51.toString(16)} maxAmp=$maxAmp",
                 )
-                android.util.Log.d("SoundDbg", m.sound.getDebugState())
             }
 
             val stats =

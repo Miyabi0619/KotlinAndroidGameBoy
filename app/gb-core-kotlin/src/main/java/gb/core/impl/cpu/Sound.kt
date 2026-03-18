@@ -40,6 +40,12 @@ class Sound {
         // サウンド周波数（CPU周波数 / 8）
         const val SOUND_FREQUENCY = CPU_FREQUENCY / 8
 
+        // DCブロッキングハイパスフィルタ係数（実機アナログコンデンサのモデル）
+        // α = exp(-2π × fc / fs)、fc=40Hz、fs=44100Hz → α ≈ 0.9943
+        // y[n] = x[n] - cap[n]  （cap[n] = cap[n-1]*α + x[n]*(1-α)）
+        private const val HP_ALPHA = 0.9943
+        private const val HP_ONE_MINUS_ALPHA = 1.0 - HP_ALPHA
+
         // サンプリングレート（Game Boyは約44.1kHz相当）
         const val SAMPLE_RATE = 44100
 
@@ -61,13 +67,28 @@ class Sound {
         // NR52 (offset 0x16) is handled separately in readRegister
         private val REGISTER_READ_MASKS =
             intArrayOf(
-                0x80, 0x3F, 0x00, 0xFF, 0xBF,
+                0x80,
+                0x3F,
+                0x00,
                 0xFF,
-                0x3F, 0x00, 0xFF, 0xBF,
-                0x7F, 0xFF, 0x9F, 0xFF, 0xBF,
+                0xBF,
                 0xFF,
-                0xFF, 0x00, 0x00, 0xBF,
-                0x00, 0x00,
+                0x3F,
+                0x00,
+                0xFF,
+                0xBF,
+                0x7F,
+                0xFF,
+                0x9F,
+                0xFF,
+                0xBF,
+                0xFF,
+                0xFF,
+                0x00,
+                0x00,
+                0xBF,
+                0x00,
+                0x00,
             )
     }
 
@@ -117,7 +138,30 @@ class Sound {
     private val pcmWriteOffsets = IntArray(512) // レジスタオフセット (0x14=NR50 / 0x15=NR51)
     private val pcmWriteValues = UByteArray(512) // 書き込まれた値
     private var pcmWriteCount = 0 // 今フレームの書き込み数
+
+    // 診断用: generateSamples() でリセットされる前のカウンタへのアクセス
+    val currentPcmWriteCount get() = pcmWriteCount
+    val isWaveEnabled get() = waveState.enabled
+
+    /**
+     * 診断用: Wave channel が有効で freq < 2044 かつ Wave RAM が全て 0xFF（ミュート/未初期化状態）の場合 true。
+     * この状態では全サンプルが +7168 (DC バイアス最大値) になり HP フィルタの突入ノイズを引き起こす。
+     * 注意: 0xFF は通常波形のピーク値としても現れるため、単一バイトでの判定では誤検知が起きる。
+     */
+    val hasWaveDcBiasRisk: Boolean
+        get() {
+            if (!waveState.enabled) return false
+            val nr33 = soundRegs[0x0D].toInt()
+            val nr34 = soundRegs[0x0E].toInt()
+            val freq = ((nr34 and 0x07) shl 8) or nr33
+            if (freq == 0 || freq >= 2044) return false
+            return currentWaveRamBuffer.all { it == 0xFFu.toUByte() }
+        }
     private var frameHalfCycles: Long = 0L // フレーム内経過半サウンドサイクル（毎フレームリセット）
+
+    // DCブロッキングフィルタのコンデンサ状態（左右独立）
+    private var hpCapLeft = 0.0
+    private var hpCapRight = 0.0
 
     // スキャンラインPCM: CH1/CH2 のトリガーイベントをタイムスタンプ付きで記録する。
     // ゲームが毎スキャンライン NR12(音量) + NR14(トリガー) を書き込む手法で
@@ -129,6 +173,28 @@ class Sound {
     private val sq2TriggerRelHalfCycles = LongArray(512)
     private val sq2TriggerVolumes = IntArray(512)
     private var sq2TriggerCount = 0
+
+    // Wave PCM: CH3トリガーイベントをタイムスタンプ付きで記録する。
+    // NR30=0x00 で停止 → Wave RAM 書き込み → NR34 再トリガー を繰り返す手法に対応。
+    // NR34トリガー時点の Wave RAM スナップショットとタイムスタンプを記録し、
+    // generateSamples() でサンプル単位にリプレイすることで正確な波形を再現する。
+    private val waveTriggerRelHalfCycles = LongArray(512)
+    private val waveTriggerWaveRams = Array(512) { UByteArray(16) }
+    private var waveTriggerCount = 0
+
+    // Wave RAM バイト書き込み追跡: CH3 を再トリガーせずに Wave RAM を直接更新する手法に対応。
+    // ポケモンピカチュウのタイトル画面での鳴き声のように、タイマー割り込みごとに1〜2バイトずつ
+    // Wave RAM を更新しながら CH3 を連続再生する PCM ストリーミング手法を正確に再現する。
+    // タイムスタンプ付きで各バイト書き込みを記録し、generateSamples() でサンプル単位に適用する。
+    private val waveRamWriteRelHalfCycles = LongArray(2048)
+    private val waveRamWriteIndices = IntArray(2048) // 0-15: 書き込まれた Wave RAM バイトインデックス
+    private val waveRamWriteValues = UByteArray(2048) // 書き込まれた値
+    private var waveRamWriteCount = 0
+
+    // generateSamples() でフレーム内の Wave RAM 状態をサンプル単位で再現するための作業バッファ。
+    // フレーム先頭は前フレーム終了時の Wave RAM 状態で初期化され、バイト書き込みとトリガーが
+    // 時系列順に適用される。
+    private val currentWaveRamBuffer = UByteArray(16)
 
     // フレームシーケンサ（512Hz = SOUND_FREQUENCY / 1024 = 8192 Hz / 16）
     // 8ステップ（0-7）で Length / Sweep / Envelope を更新する
@@ -238,7 +304,17 @@ class Sound {
             // 実機の厳密な仕様では Wave チャンネル再生中は書き込み先バイトが限定されるが、
             // CPU が wave RAM を高速更新する 4-bit PCM ストリーミング（ポケモンの鳴き声等）の
             // 再現には常時書き込みを許可する必要がある。
-            waveRam[offset - 0x20] = value
+            val byteIdx = offset - 0x20
+            waveRam[byteIdx] = value
+            // バイト書き込みをフレーム内タイムスタンプ付きで記録。
+            // CH3 を再トリガーせず Wave RAM を直接更新するピカチュウ等の PCM 手法を
+            // generateSamples() でサンプル単位に再現するために使用する。
+            if (waveRamWriteCount < waveRamWriteRelHalfCycles.size) {
+                waveRamWriteRelHalfCycles[waveRamWriteCount] = frameHalfCycles
+                waveRamWriteIndices[waveRamWriteCount] = byteIdx
+                waveRamWriteValues[waveRamWriteCount] = value
+                waveRamWriteCount++
+            }
             return
         }
 
@@ -472,6 +548,14 @@ class Sound {
                         }
                         // 長さカウンタの累積器をリセット
                         waveState.lengthCounterAccumulator = 0
+                        // Wave PCM: トリガーイベントをフレーム内タイムスタンプ付きで記録。
+                        // この時点の Wave RAM スナップショットを保存し、generateSamples() で
+                        // サンプル単位にリプレイすることでピカチュウの鳴き声を正確に再現する。
+                        if (waveTriggerCount < waveTriggerRelHalfCycles.size) {
+                            waveTriggerRelHalfCycles[waveTriggerCount] = frameHalfCycles
+                            waveRam.copyInto(waveTriggerWaveRams[waveTriggerCount])
+                            waveTriggerCount++
+                        }
                     }
                 }
             }
@@ -627,10 +711,20 @@ class Sound {
     fun getDebugState(): String {
         val sq1freq = ((soundRegs[0x04].toInt() and 0x07) shl 8) or soundRegs[0x03].toInt()
         val sq2freq = ((soundRegs[0x09].toInt() and 0x07) shl 8) or soundRegs[0x08].toInt()
+        val waveFreq = ((soundRegs[0x0E].toInt() and 0x07) shl 8) or soundRegs[0x0D].toInt()
+        val waveVol = (soundRegs[0x0C].toInt() shr 5) and 0x03
+        val waveRamHex = waveRam.joinToString("") { it.toString(16).padStart(2, '0') }
+        val waveRamBufHex = currentWaveRamBuffer.joinToString("") { it.toString(16).padStart(2, '0') }
+        val nr11 = soundRegs[0x01].toInt()
+        val nr21 = soundRegs[0x06].toInt()
+        val sq1duty = (nr11 shr 6) and 0x03
+        val sq2duty = (nr21 shr 6) and 0x03
         return "sq1[en=${square1State.enabled} vol=${square1State.envelopeVolume} freq=$sq1freq " +
-            "nr12=0x${soundRegs[0x02].toString(16)}] " +
+            "duty=$sq1duty nr12=0x${soundRegs[0x02].toString(16)}] " +
             "sq2[en=${square2State.enabled} vol=${square2State.envelopeVolume} freq=$sq2freq " +
-            "nr22=0x${soundRegs[0x07].toString(16)}] " +
+            "duty=$sq2duty nr22=0x${soundRegs[0x07].toString(16)}] " +
+            "ch3[en=${waveState.enabled} freq=$waveFreq vol=$waveVol triggers=$waveTriggerCount writes=$waveRamWriteCount " +
+            "ram=$waveRamHex buf=$waveRamBufHex hpCap=${hpCapLeft.toInt()}] " +
             "pcmWrites=$pcmWriteCount"
     }
 
@@ -676,7 +770,7 @@ class Sound {
         // チャンネル有効状態はサンプル生成中に変化しないのでループ外でキャッシュ
         val square1Enabled = square1State.enabled
         val square2Enabled = square2State.enabled
-        val waveEnabled = waveState.enabled
+        // waveEnabled は Wave PCM トリガーログで動的に管理するため、ここではキャッシュしない
         val noiseEnabled = noiseState.enabled
 
         // 1-bit PCM: NR50/NR51 はフレーム内書き込みログを使いサンプル単位で追跡する。
@@ -691,6 +785,14 @@ class Sound {
         var currentSq2Volume = square2State.envelopeVolume
         var sq1TriggerPtr = 0
         var sq2TriggerPtr = 0
+
+        // Wave PCM: currentWaveRamBuffer はフィールドとして持続するため、再初期化不要。
+        // 前フレーム終了時点の状態を保持しており、今フレームのバイト書き込みとトリガーが
+        // 時系列順に適用されることで各サンプルでの正確な Wave RAM 状態を再現する。
+        // waveCurrentlyEnabled: サンプル生成中の CH3 有効状態（トリガーで true になる）。
+        var waveTriggerPtr = 0
+        var waveRamWritePtr = 0
+        var waveCurrentlyEnabled = waveState.enabled
 
         var sampleIndex = 0
         var soundCycleOffset = 0.0
@@ -782,9 +884,31 @@ class Sound {
                 if (square2Right) rightMixed += square2Sample
             }
 
+            // Wave PCM (連続書き込み方式): このサンプルの終端より前に書き込まれた
+            // Wave RAM バイトを時系列順に currentWaveRamBuffer へ適用する。
+            // ポケモンピカチュウはこの方式（freq=1782、NR34 再トリガーなし）を使用。
+            while (waveRamWritePtr < waveRamWriteCount &&
+                waveRamWriteRelHalfCycles[waveRamWritePtr] < sampleEndRelHalf
+            ) {
+                currentWaveRamBuffer[waveRamWriteIndices[waveRamWritePtr]] =
+                    waveRamWriteValues[waveRamWritePtr]
+                waveRamWritePtr++
+            }
+
+            // Wave PCM (stop/retrigger 方式): このサンプルの終端より前に発火したトリガーイベントを適用。
+            // 各トリガーで Wave RAM スナップショットを currentWaveRamBuffer にコピーし、位相をリセット。
+            while (waveTriggerPtr < waveTriggerCount &&
+                waveTriggerRelHalfCycles[waveTriggerPtr] < sampleEndRelHalf
+            ) {
+                waveTriggerWaveRams[waveTriggerPtr].copyInto(currentWaveRamBuffer)
+                waveState.phaseAccumulator = 0.0
+                waveCurrentlyEnabled = true
+                waveTriggerPtr++
+            }
+
             // Waveチャンネル
-            if (waveEnabled) {
-                val waveSample = generateWaveSample(soundCyclesPerSample)
+            if (waveCurrentlyEnabled) {
+                val waveSample = generateWaveSample(soundCyclesPerSample, currentWaveRamBuffer)
                 if (waveLeft) leftMixed += waveSample
                 if (waveRight) rightMixed += waveSample
             }
@@ -803,28 +927,29 @@ class Sound {
             leftMixed = if (leftVolume == 0) 0L else leftMixed * leftVolume / 7
             rightMixed = if (rightVolume == 0) 0L else rightMixed * rightVolume / 7
 
-            // ステレオ出力（左右交互）
-            val leftSample =
-                when {
-                    leftMixed < -32768L -> -32768
-                    leftMixed > 32767L -> 32767
-                    else -> leftMixed.toInt()
-                }.toShort()
-            val rightSample =
-                when {
-                    rightMixed < -32768L -> -32768
-                    rightMixed > 32767L -> 32767
-                    else -> rightMixed.toInt()
-                }.toShort()
+            // DCブロッキングハイパスフィルタ（実機のアナログコンデンサをモデル化）
+            // cap[n] = cap[n-1]*α + x[n]*(1-α)  →  y[n] = x[n] - cap[n]
+            // 遮断周波数 ~40Hz: DCオフセットとエンベロープ変化時のポップノイズを除去する
+            val rawLeft = leftMixed.toDouble()
+            val rawRight = rightMixed.toDouble()
+            hpCapLeft = hpCapLeft * HP_ALPHA + rawLeft * HP_ONE_MINUS_ALPHA
+            hpCapRight = hpCapRight * HP_ALPHA + rawRight * HP_ONE_MINUS_ALPHA
+            val filteredLeft = rawLeft - hpCapLeft
+            val filteredRight = rawRight - hpCapRight
 
-            samples[sampleIndex++] = leftSample
-            samples[sampleIndex++] = rightSample
+            samples[sampleIndex++] = filteredLeft.coerceIn(-32768.0, 32767.0).toInt().toShort()
+            samples[sampleIndex++] = filteredRight.coerceIn(-32768.0, 32767.0).toInt().toShort()
         }
 
         // フレーム終了時に書き込みログとフレーム内カウンタをリセット
         pcmWriteCount = 0
         sq1TriggerCount = 0
         sq2TriggerCount = 0
+        // currentWaveRamBuffer はフィールドとして持続するため、明示的なコピー不要。
+        // generateSamples() 内でバイト書き込みとトリガーが適用された最終状態が
+        // 次フレームの先頭サンプルの Wave RAM 状態として自然に引き継がれる。
+        waveTriggerCount = 0
+        waveRamWriteCount = 0
         frameHalfCycles = 0L
 
         return samples
@@ -1183,19 +1308,23 @@ class Sound {
      * Waveチャンネルのサンプルを生成する。
      *
      * @param soundCyclesPerSample 1サンプルあたりのサウンドサイクル数（差分）
+     * @param currentWaveRam 使用する Wave RAM スナップショット（Wave PCM では毎トリガーで切り替わる）
      */
-    private fun generateWaveSample(soundCyclesPerSample: Double): Int {
-        // チャンネルが無効な場合は即座に0を返す（パフォーマンス向上）
-        if (!waveState.enabled) {
-            return 0
-        }
-
+    private fun generateWaveSample(
+        soundCyclesPerSample: Double,
+        currentWaveRam: UByteArray = waveRam,
+    ): Int {
         val nr33 = soundRegs[0x0D] // NR33 (Frequency Low)
         val nr34 = soundRegs[0x0E] // NR34 (Frequency High & Trigger)
 
         // 周波数を計算
         val frequency = ((nr34.toInt() and 0x07) shl 8) or nr33.toInt()
-        if (frequency == 0 || frequency >= 2048) {
+        // freq >= 2044 → 波形周波数 16384 Hz 以上（人間の可聴域上限付近～超音波域）。
+        // 実機でも不可聴だが、HP フィルタに大きな DC オフセットを与えて
+        // 次フレームで突入ノイズを発生させるため、0 を返す。
+        // ゲームが freq=2047 等を「Wave チャンネルを無音化する」手段として使うケース（例：ポケモン
+        // ピカチュウの鳴き声切り替え時）への対処。
+        if (frequency == 0 || frequency >= 2044) {
             return 0
         }
 
@@ -1223,9 +1352,9 @@ class Sound {
         val byteIndex = (sampleIndex / 2).coerceIn(0, 15)
         val nibble =
             if (sampleIndex % 2 == 0) {
-                (waveRam[byteIndex].toInt() shr 4) and 0x0F
+                (currentWaveRam[byteIndex].toInt() shr 4) and 0x0F
             } else {
-                waveRam[byteIndex].toInt() and 0x0F
+                currentWaveRam[byteIndex].toInt() and 0x0F
             }
 
         // ボリュームシフトを適用

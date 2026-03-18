@@ -168,6 +168,13 @@ class SystemBus(
 
         // DMA転送中（160サイクル）は、HRAM（0xFF80-0xFFFE）以外への書き込みは無視される（実機仕様）
         if (ppu.dmaActive && addr !in 0xFF80..0xFFFE) {
+            // 診断: Wave RAM への書き込みが DMA によってドロップされた場合、1回だけログに記録
+            if (addr in 0xFF30..0xFF3F) {
+                android.util.Log.w(
+                    "SoundDiag",
+                    "DMA blocked Wave RAM write: addr=0x${addr.toString(16)} val=0x${value.toString(16)}",
+                )
+            }
             return
         }
 
