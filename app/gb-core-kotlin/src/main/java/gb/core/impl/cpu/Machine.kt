@@ -117,6 +117,7 @@ class Machine(
                 0x10, // MBC3+TIMER+RAM+BATTERY
                 0x13, // MBC3+RAM+BATTERY
                 -> true
+
                 else -> false
             }
 
@@ -139,6 +140,7 @@ class Machine(
                 ppu = ppu,
                 sound = sound,
             )
+
         cpu = Cpu(bus)
 
         // Game Boy 起動時のレジスタ初期化
@@ -152,7 +154,12 @@ class Machine(
         cpu.registers.hl = 0x014Du.toUShort()
     }
 
-    private class MbcResult(val mbc1: Mbc1?, val mbc3: Mbc3?, val mbc5: Mbc5?, val ram: UByteArray?)
+    private class MbcResult(
+        val mbc1: Mbc1?,
+        val mbc3: Mbc3?,
+        val mbc5: Mbc5?,
+        val ram: UByteArray?,
+    )
 
     private fun createMbcAndRamIfNeeded(rom: UByteArray): MbcResult {
         if (rom.isEmpty()) {
@@ -180,11 +187,22 @@ class Machine(
         val ramSizeBytes =
             when (ramSizeCode) {
                 0x00 -> 0
-                0x01 -> 0x800 // 2KB
-                0x02 -> 0x2000 // 8KB
-                0x03 -> 0x8000 // 32KB (4 banks)
-                0x04 -> 0x20000 // 128KB
-                0x05 -> 0x10000 // 64KB
+
+                0x01 -> 0x800
+
+                // 2KB
+                0x02 -> 0x2000
+
+                // 8KB
+                0x03 -> 0x8000
+
+                // 32KB (4 banks)
+                0x04 -> 0x20000
+
+                // 128KB
+                0x05 -> 0x10000
+
+                // 64KB
                 else -> 0
             }
 
