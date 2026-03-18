@@ -55,6 +55,16 @@ class PpuTest {
         step(1) // LY++ トリガー
     }
 
+    /**
+     * テスト用: step() なしで即時キャプチャしてフレームを返す。
+     * 実機では VBlank 開始時に自動キャプチャされるが、ユニットテストでは
+     * step() を 65,664 サイクル回す必要があるため、このヘルパーを使う。
+     */
+    private fun Ppu.renderForTest(): IntArray {
+        captureFrameInternal()
+        return renderFrame()
+    }
+
     // ────────────────────────────────────────────────────────────────
     // LY（スキャンライン）更新
     // ────────────────────────────────────────────────────────────────
@@ -79,7 +89,7 @@ class PpuTest {
         val interruptController = InterruptController()
         val oam = UByteArray(0xA0) { 0u }
         val ppu = Ppu(vram, oam, interruptController)
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
 
         // 左上 8x8 ピクセルはすべてタイル 0（黒）になっているはず
         val black = 0xFF000000.toInt()
@@ -283,7 +293,7 @@ class PpuTest {
         // BGP = 0x00: 全カラーIDをエントリ0（白）にマップ
         ppu.writeRegister(0x07, 0x00u)
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         val white = 0xFFFFFFFF.toInt()
         // タイル 0 の左上 8x8 はすべて白のはず
         for (y in 0 until 8) {
@@ -311,7 +321,7 @@ class PpuTest {
         // 実際: 0xFC = 11111100 → entry0=0b00=白, entry1=0b11=黒, ...
         ppu.writeRegister(0x07, 0xFCu)
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         val white = 0xFFFFFFFF.toInt()
         val black = 0xFF000000.toInt()
 
@@ -339,7 +349,7 @@ class PpuTest {
         // LCDC bit0 = 0: BG 無効（bit7=1 で LCD は有効のまま）
         ppu.writeRegister(0x00, 0x90u) // 0x90 = 1001_0000 (bit7=1, bit4=1, bit0=0)
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         val white = 0xFFFFFFFF.toInt()
         // BG が無効なので画面全体が白のはず
         assertTrue("BG 無効時は全ピクセルが白のはず", frame.all { it == white })
@@ -365,12 +375,12 @@ class PpuTest {
 
         // SCX = 0: 左端 (x=0) はタイル 0（黒）
         ppu.writeRegister(0x03, 0x00u) // SCX = 0
-        val frameNoScroll = ppu.renderFrame()
+        val frameNoScroll = ppu.renderForTest()
         val firstPixelNoScroll = frameNoScroll[0]
 
         // SCX = 8: 左端 (x=0) がタイル 1（白）にシフト
         ppu.writeRegister(0x03, 0x08u) // SCX = 8
-        val frameScrolled = ppu.renderFrame()
+        val frameScrolled = ppu.renderForTest()
         val firstPixelScrolled = frameScrolled[0]
 
         assertNotEquals(

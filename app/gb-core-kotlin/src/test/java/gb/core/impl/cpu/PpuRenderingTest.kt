@@ -111,13 +111,23 @@ class PpuRenderingTest {
         y: Int,
     ): Int = this[y * Ppu.SCREEN_WIDTH + x]
 
+    /**
+     * テスト用: step() なしで即時キャプチャしてフレームを返す。
+     * 実機では VBlank 開始時に自動キャプチャされるが、ユニットテストでは
+     * step() を 65,664 サイクル回す必要があるため、このヘルパーを使う。
+     */
+    private fun Ppu.renderForTest(): IntArray {
+        captureFrameInternal()
+        return renderFrame()
+    }
+
     // ────────────────────────────────────────────────────────────────
     // 基本
     // ────────────────────────────────────────────────────────────────
 
     @Test
     fun `renderFrame returns 160x144 pixel buffer`() {
-        val frame = makePpu().renderFrame()
+        val frame = makePpu().renderForTest()
         assertEquals(Ppu.SCREEN_WIDTH * Ppu.SCREEN_HEIGHT, frame.size)
     }
 
@@ -129,7 +139,7 @@ class PpuRenderingTest {
 
         val ppu = makePpu(vram)
         ppu.writeRegister(0x00, 0x11u) // LCDC bit7=0: LCD off
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
 
         assertTrue("LCD 無効時は全ピクセル白のはず", frame.all { it == WHITE })
     }
@@ -149,7 +159,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte())
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        assertEquals("colorId=1 → LIGHT_GRAY のはず", LIGHT_GRAY, ppu.renderFrame().pixel(0, 0))
+        assertEquals("colorId=1 → LIGHT_GRAY のはず", LIGHT_GRAY, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -163,7 +173,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte())
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        assertEquals("colorId=2 → DARK_GRAY のはず", DARK_GRAY, ppu.renderFrame().pixel(0, 0))
+        assertEquals("colorId=2 → DARK_GRAY のはず", DARK_GRAY, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -177,7 +187,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte())
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        assertEquals("colorId=3 → BLACK のはず", BLACK, ppu.renderFrame().pixel(0, 0))
+        assertEquals("colorId=3 → BLACK のはず", BLACK, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -187,7 +197,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte())
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        assertEquals("colorId=0 → WHITE のはず", WHITE, ppu.renderFrame().pixel(0, 0))
+        assertEquals("colorId=0 → WHITE のはず", WHITE, ppu.renderForTest().pixel(0, 0))
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -205,7 +215,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte())
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         assertEquals("bit7 → x=0 は LIGHT_GRAY のはず", LIGHT_GRAY, frame.pixel(0, 0))
         assertEquals("bit7 のみセット → x=1 は WHITE のはず", WHITE, frame.pixel(1, 0))
     }
@@ -221,7 +231,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte())
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         assertEquals("bit0 → x=7 は LIGHT_GRAY のはず", LIGHT_GRAY, frame.pixel(7, 0))
         assertEquals("bit0 のみセット → x=6 は WHITE のはず", WHITE, frame.pixel(6, 0))
     }
@@ -241,7 +251,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte()) // bit4=1: 0x8000 モード
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        assertEquals("0x8000 モード: タイル 1 → BLACK のはず", BLACK, ppu.renderFrame().pixel(0, 0))
+        assertEquals("0x8000 モード: タイル 1 → BLACK のはず", BLACK, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -258,7 +268,7 @@ class PpuRenderingTest {
         assertEquals(
             "0x8800 モード: インデックス 0 → vram[0x1000] の BLACK のはず",
             BLACK,
-            ppu.renderFrame().pixel(0, 0),
+            ppu.renderForTest().pixel(0, 0),
         )
     }
 
@@ -279,7 +289,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, LCDC_DEFAULT.toUByte()) // bit3=0: マップ 0 使用
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        assertEquals("LCDC bit3=0: マップ 0 → タイル 0 = BLACK のはず", BLACK, ppu.renderFrame().pixel(0, 0))
+        assertEquals("LCDC bit3=0: マップ 0 → タイル 0 = BLACK のはず", BLACK, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -294,7 +304,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, 0x99u) // LCDC: LCD on, 0x8000, bit3=1（マップ 1）, BG on
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
-        assertEquals("LCDC bit3=1: マップ 1 → タイル 0 = BLACK のはず", BLACK, ppu.renderFrame().pixel(0, 0))
+        assertEquals("LCDC bit3=1: マップ 1 → タイル 0 = BLACK のはず", BLACK, ppu.renderForTest().pixel(0, 0))
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -314,10 +324,10 @@ class PpuRenderingTest {
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
         ppu.writeRegister(0x02, 0x00u) // SCY=0: 画面 y=0 → BG y=0 → タイル行 0 → BLACK
-        assertEquals("SCY=0: 画面 (0,0) は BLACK のはず", BLACK, ppu.renderFrame().pixel(0, 0))
+        assertEquals("SCY=0: 画面 (0,0) は BLACK のはず", BLACK, ppu.renderForTest().pixel(0, 0))
 
         ppu.writeRegister(0x02, 0x08u) // SCY=8: 画面 y=0 → BG y=8 → タイル行 1 → WHITE
-        assertEquals("SCY=8: 画面 (0,0) は WHITE のはず（タイル行 1 に移動）", WHITE, ppu.renderFrame().pixel(0, 0))
+        assertEquals("SCY=8: 画面 (0,0) は WHITE のはず（タイル行 1 に移動）", WHITE, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -333,10 +343,10 @@ class PpuRenderingTest {
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
 
         ppu.writeRegister(0x03, 0x00u) // SCX=0: 画面 x=0 → BG x=0 → 列0 → BLACK
-        assertEquals("SCX=0: 画面 (0,0) は BLACK のはず", BLACK, ppu.renderFrame().pixel(0, 0))
+        assertEquals("SCX=0: 画面 (0,0) は BLACK のはず", BLACK, ppu.renderForTest().pixel(0, 0))
 
         ppu.writeRegister(0x03, 0x08u) // SCX=8: 画面 x=0 → BG x=8 → 列1 → WHITE
-        assertEquals("SCX=8: 画面 (0,0) は WHITE のはず", WHITE, ppu.renderFrame().pixel(0, 0))
+        assertEquals("SCX=8: 画面 (0,0) は WHITE のはず", WHITE, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -351,7 +361,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
         ppu.writeRegister(0x03, 248.toUByte()) // SCX=248
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         // 画面 x=7: BG x=(7+248)&0xFF=255 → 列31 → タイル 0 → WHITE
         assertEquals("SCX=248: 画面 x=7（BG x=255）は WHITE のはず", WHITE, frame.pixel(7, 0))
         // 画面 x=8: BG x=(8+248)&0xFF=0 → 列0 → タイル 1 → BLACK（ラップアラウンド）
@@ -389,7 +399,7 @@ class PpuRenderingTest {
         assertEquals(
             "ウィンドウ有効: 画面 (0,0) は BLACK（ウィンドウから）のはず",
             BLACK,
-            ppu.renderFrame().pixel(0, 0),
+            ppu.renderForTest().pixel(0, 0),
         )
     }
 
@@ -404,7 +414,7 @@ class PpuRenderingTest {
         assertEquals(
             "ウィンドウ無効: 画面 (0,0) は WHITE（BG から）のはず",
             WHITE,
-            ppu.renderFrame().pixel(0, 0),
+            ppu.renderForTest().pixel(0, 0),
         )
     }
 
@@ -415,7 +425,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x0A, 8u) // WY=8: ウィンドウは行 8 以降のみ
         ppu.writeRegister(0x0B, 7u)
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         assertEquals("WY=8: 画面 y=7 は WHITE（BG）のはず", WHITE, frame.pixel(0, 7))
         assertEquals("WY=8: 画面 y=8 は BLACK（ウィンドウ）のはず", BLACK, frame.pixel(0, 8))
     }
@@ -427,7 +437,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x0A, 0x00u)
         ppu.writeRegister(0x0B, 14u) // WX=14 → windowStartX = 14-7 = 7
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         assertEquals("WX=14: 画面 x=6 は WHITE（BG）のはず", WHITE, frame.pixel(6, 0))
         assertEquals("WX=14: 画面 x=7 は BLACK（ウィンドウ）のはず", BLACK, frame.pixel(7, 0))
     }
@@ -449,7 +459,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, 0x93u) // LCDC: LCD on, 0x8000, スプライト on, BG on
         // OBP0 デフォルト 0xFF: colorId=3 → entry3 → BLACK
 
-        assertEquals("スプライト (0,0): BLACK のはず", BLACK, ppu.renderFrame().pixel(0, 0))
+        assertEquals("スプライト (0,0): BLACK のはず", BLACK, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -470,7 +480,7 @@ class PpuRenderingTest {
         assertEquals(
             "colorId=0 のスプライト → BG の BLACK が透けて見えるはず",
             BLACK,
-            ppu.renderFrame().pixel(0, 0),
+            ppu.renderForTest().pixel(0, 0),
         )
     }
 
@@ -489,7 +499,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
         ppu.writeRegister(0x08, BGP_IDENTITY.toUByte()) // OBP0 恒等: colorId=1 → LIGHT_GRAY
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         // X フリップ後: x=0 は bit0 → colorId=0（透明）→ BG 白
         assertEquals("X フリップ: x=0 は WHITE（透明）のはず", WHITE, frame.pixel(0, 0))
         // X フリップ後: x=7 は bit7 → colorId=1 → LIGHT_GRAY
@@ -511,7 +521,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x07, BGP_IDENTITY.toUByte())
         ppu.writeRegister(0x08, BGP_IDENTITY.toUByte()) // OBP0 恒等
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         // Y フリップ: 画面 y=0 → actualRow=7 → 行 7（colorId=0）→ 透明 → BG 白
         assertEquals("Y フリップ: 画面 y=0 は WHITE（行 7 = 透明）のはず", WHITE, frame.pixel(0, 0))
         // 画面 y=7 → actualRow=0 → 行 0（colorId=1）→ LIGHT_GRAY
@@ -536,7 +546,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x08, 0x04u) // OBP0: colorId=1 → entry1=01 → LIGHT_GRAY
         ppu.writeRegister(0x09, 0x08u) // OBP1: colorId=1 → entry1=10 → DARK_GRAY
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         assertEquals("OBP0(0x04): colorId=1 → LIGHT_GRAY のはず", LIGHT_GRAY, frame.pixel(0, 0))
         assertEquals("OBP1(0x08): colorId=1 → DARK_GRAY のはず", DARK_GRAY, frame.pixel(8, 0))
     }
@@ -561,7 +571,7 @@ class PpuRenderingTest {
         assertEquals(
             "優先度フラグ: BG colorId≠0 のとき BLACK（BG）が前面に来るはず",
             BLACK,
-            ppu.renderFrame().pixel(0, 0),
+            ppu.renderForTest().pixel(0, 0),
         )
     }
 
@@ -583,7 +593,7 @@ class PpuRenderingTest {
         assertEquals(
             "優先度フラグ: BG colorId=0 のときスプライトが描画されるはず",
             LIGHT_GRAY,
-            ppu.renderFrame().pixel(0, 0),
+            ppu.renderForTest().pixel(0, 0),
         )
     }
 
@@ -603,7 +613,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, 0x93u)
 
         // スプライトは全画面外 → 画面 (0,0) は BG（WHITE）
-        assertEquals("X=-8 のスプライトは描画されず WHITE のはず", WHITE, ppu.renderFrame().pixel(0, 0))
+        assertEquals("X=-8 のスプライトは描画されず WHITE のはず", WHITE, ppu.renderForTest().pixel(0, 0))
     }
 
     @Test
@@ -620,7 +630,7 @@ class PpuRenderingTest {
         ppu.writeRegister(0x00, 0x97u) // LCDC: LCD on, 0x8000, bit2=1（8x16）, スプライト on, BG on
         // OBP0 デフォルト 0xFF: colorId=3 → BLACK
 
-        val frame = ppu.renderFrame()
+        val frame = ppu.renderForTest()
         // 上半部（y=0-7）: タイル 2 → colorId=0（透明）→ BG WHITE
         assertEquals("8x16 上半部: BG の WHITE が透けて見えるはず", WHITE, frame.pixel(0, 0))
         // 下半部（y=8-15）: タイル 3 → colorId=3 → BLACK

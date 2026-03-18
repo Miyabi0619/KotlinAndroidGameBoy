@@ -76,9 +76,16 @@ class Ppu(
     private var statInterruptLine: Boolean = false
 
     // スキャンラインごとのSCX/SCYスナップショット（ラスタースクロール対応）
-    // 各スキャンラインのMode 2（OAM Search）開始時にキャプチャする
-    private val scanlineScx = IntArray(SCREEN_HEIGHT)
-    private val scanlineScy = IntArray(SCREEN_HEIGHT)
+    // 各スキャンラインのMode 2（OAM Search）開始時にキャプチャする。
+    // -1 = 未設定（step() が呼ばれていない / 新フレーム開始後まだキャプチャされていない）を示すセンチネル値。
+    // captureFrameInternal() では -1 のスキャンラインは現在の scx/scy レジスタ値にフォールバックする。
+    private val scanlineScx = IntArray(SCREEN_HEIGHT) { -1 }
+    private val scanlineScy = IntArray(SCREEN_HEIGHT) { -1 }
+
+    // VBlank 開始時にキャプチャしたフレームバッファ（ちらつき防止）
+    // VBlank 中にゲームが VRAM/OAM を書き換える前の「完成した1フレーム」を保持する。
+    // renderFrame() はこのバッファのコピーを返すだけにする。
+    private val frameBuffer = IntArray(SCREEN_WIDTH * SCREEN_HEIGHT) { 0xFFFFFFFF.toInt() }
 
     // DMA転送状態（SystemBusからアクセス可能にするため、publicにする）
     var dmaActive: Boolean = false
@@ -323,10 +330,17 @@ class Ppu(
                     // VBlank開始（Mode 1）
                     setMode(PpuMode.VBLANK)
                     interruptController.request(InterruptController.Type.VBLANK)
+                    // VBlank 開始直前（スキャンライン 143 完了直後）にフレームをキャプチャする。
+                    // ゲームは VBlank 中に VRAM/OAM を次フレーム用に書き換えるため、
+                    // その前にキャプチャしないと現フレームと次フレームが混在したちらつきが発生する。
+                    captureFrameInternal()
                     // LYC=LY チェックを含む STAT 信号更新
                     updateStatInterruptLine()
                 } else if (ly == 0u.toUByte()) {
-                    // VBlank終了、次のフレーム開始（Mode 2）- スキャンライン0のSCX/SCYをキャプチャ
+                    // VBlank終了、次のフレーム開始（Mode 2）
+                    // 新フレーム開始時に配列を -1（未設定）にリセットしてから、スキャンライン0をキャプチャ
+                    scanlineScx.fill(-1)
+                    scanlineScy.fill(-1)
                     scanlineScx[0] = scx.toInt()
                     scanlineScy[0] = scy.toInt()
                     setMode(PpuMode.OAM_SEARCH)
@@ -443,8 +457,11 @@ class Ppu(
 
         var duration = CYCLES_MODE_3_MIN // 172 base
 
-        // SCX mod 8 によるペナルティ
-        duration += scx.toInt() and 0x07
+        // SCX mod 8 によるペナルティ（スキャンライン固有のキャプチャ値を使用）
+        // -1（未設定センチネル）の場合は現在の scx レジスタにフォールバックする
+        val rawScx = if (currentLy < scanlineScx.size) scanlineScx[currentLy] else -1
+        val scxForLine = if (rawScx >= 0) rawScx else scx.toInt()
+        duration += scxForLine and 0x07
 
         // このスキャンラインのスプライト数をカウント
         val lcdcInt = lcdc.toInt()
@@ -477,38 +494,34 @@ class Ppu(
     }
 
     /**
-     * 現在の VRAM 内容から 160x144 の ARGB フレームバッファを生成する。
+     * VBlank 開始時にキャプチャ済みのフレームバッファを返す。
+     *
+     * フレームバッファは [step] 内で LY=144（VBlank 開始）になった瞬間に
+     * [captureFrameInternal] によってキャプチャされる。
+     * これにより、ゲームが VBlank 中に VRAM/OAM を次フレーム用に書き換えても
+     * 現フレームと次フレームが混在するちらつきが発生しない。
      *
      * - デバッグモード: テスト描画を有効にする場合は [debugMode] を true にする
-     * - 通常モード: VRAM からタイルデータを読み取って描画
      */
     fun renderFrame(debugMode: Boolean = false): IntArray {
-        val pixels = IntArray(SCREEN_WIDTH * SCREEN_HEIGHT)
+        if (debugMode) return renderTestPattern()
+        return frameBuffer.copyOf()
+    }
 
-        if (debugMode) {
-            // テスト描画: チェッカーボードパターンで PPU が正しく動作しているか確認
-            return renderTestPattern()
-        }
-
-        // scanlineScx/Scy は step() 経由のみ更新されるため、
-        // step() を経由せずに呼ばれた場合（ユニットテスト等）は現在の scx/scy で全行を初期化する
-        val currentScx = scx.toInt()
-        val currentScy = scy.toInt()
-        for (i in 0 until SCREEN_HEIGHT) {
-            if (scanlineScx[i] == 0 && currentScx != 0) scanlineScx[i] = currentScx
-            if (scanlineScy[i] == 0 && currentScy != 0) scanlineScy[i] = currentScy
-        }
-
+    /**
+     * VRAM/OAM/レジスタの現在状態から [frameBuffer] へ描画する（VBlank 開始時に呼ばれる）。
+     *
+     * scanlineScx/Scy は step() の各スキャンライン開始時にキャプチャされた値を使用する。
+     * step() を経由せずに呼ばれた場合（ユニットテスト等）は IntArray デフォルト値の 0 が使われる
+     * （スクロールなし = 0 はデフォルトとして正しい動作）。
+     */
+    internal fun captureFrameInternal() {
         // LCDC.7 (LCD Enable) が 0 の場合は、画面を白で塗りつぶす
         val lcdEnabled = (lcdc.toInt() and 0x80) != 0
         if (!lcdEnabled) {
-            // LCD が無効な場合は、すべて白で塗りつぶす
-            pixels.fill(0xFFFFFFFF.toInt())
-            return pixels
+            frameBuffer.fill(0xFFFFFFFF.toInt())
+            return
         }
-
-        // VRAM の内容確認を削除（パフォーマンス向上のため）
-        // デバッグが必要な場合は、条件付きコンパイルやフラグで制御する
 
         // 背景/ウィンドウのカラーIDを保持する配列（スプライトの優先度処理用）
         val bgColorIds = UByteArray(SCREEN_WIDTH * SCREEN_HEIGHT) { 0u }
@@ -541,24 +554,27 @@ class Ppu(
 
         // 最適化: 型変換と計算を削減（スコープ外で定義）
         val vramSize = vram.size
-        val whiteColor = 0xFFFFFFFF.toInt()
 
         if (bgEnabled) {
+            val currentScx = scx.toInt()
+            val currentScy = scy.toInt()
             for (y in 0 until SCREEN_HEIGHT) {
-                // スキャンラインごとにキャプチャしたSCX/SCYを使用（ラスタースクロール対応）
-                val scxInt = scanlineScx[y]
-                val scyInt = scanlineScy[y]
+                // スキャンラインごとにキャプチャしたSCX/SCYを使用（ラスタースクロール対応）。
+                // -1（未設定）の場合は現在の scx/scy レジスタ値にフォールバック。
+                // これにより step() なしで captureFrameInternal() を呼ぶテストでも正常動作する。
+                val scxInt = if (scanlineScx[y] >= 0) scanlineScx[y] else currentScx
+                val scyInt = if (scanlineScy[y] >= 0) scanlineScy[y] else currentScy
                 // スクロールYを考慮した背景Y座標
                 val bgY = (y + scyInt) and 0xFF
-                val tileRow = bgY shr 3 // / 8 をビットシフトに置き換え
-                val rowInTile = bgY and 0x07 // % 8 をビット演算に置き換え
-                val rowInTile2 = rowInTile shl 1 // rowInTile * 2
+                val tileRow = bgY shr 3
+                val rowInTile = bgY and 0x07
+                val rowInTile2 = rowInTile shl 1
 
                 for (x in 0 until SCREEN_WIDTH) {
                     // スクロールXを考慮した背景X座標
                     val bgX = (x + scxInt) and 0xFF
-                    val tileCol = bgX shr 3 // / 8 をビットシフトに置き換え
-                    val colInTile = bgX and 0x07 // % 8 をビット演算に置き換え
+                    val tileCol = bgX shr 3
+                    val colInTile = bgX and 0x07
 
                     // 32x32タイルマップなので、モジュロ演算でラップアラウンド
                     val bgIndex = bgMapBase + (tileRow and 0x1F) * BG_MAP_WIDTH + (tileCol and 0x1F)
@@ -578,7 +594,6 @@ class Ppu(
                     // タイルデータは 0x8000 から、1 タイル 16 バイト
                     val lineAddr = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES + rowInTile2
 
-                    // 範囲チェックを事前に行う（getOrElseのオーバーヘッドを削減）
                     val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
                     val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
 
@@ -588,15 +603,13 @@ class Ppu(
                             ((low shr bit) and 0x1)
 
                     val pixelIndex = y * SCREEN_WIDTH + x
-                    // ルックアップテーブルを使用（関数呼び出しのオーバーヘッドを削減）
-                    pixels[pixelIndex] = paletteColors[colorId]
+                    frameBuffer[pixelIndex] = paletteColors[colorId]
                     bgColorIds[pixelIndex] = colorId.toUByte()
                 }
             }
         } else {
             // 背景が無効な場合は、すべて白で塗りつぶし、カラーIDは0
-            // 最適化: fillを使用して高速化
-            pixels.fill(whiteColor)
+            frameBuffer.fill(0xFFFFFFFF.toInt())
             bgColorIds.fill(0u)
         }
 
@@ -604,16 +617,14 @@ class Ppu(
         // LCDC.5 (Window Enable) が 1 の場合のみ描画
         val windowEnabled = (lcdcInt and 0x20) != 0
         if (windowEnabled) {
-            renderWindow(pixels, bgColorIds, lcdcInt, paletteColors)
+            renderWindow(frameBuffer, bgColorIds, lcdcInt, paletteColors)
         }
 
         // スプライトの描画（LCDC.1が1の場合のみ）
         val spriteEnabled = (lcdcInt and 0x02) != 0
         if (spriteEnabled) {
-            renderSprites(pixels, bgColorIds, obp0, obp1, lcdcInt)
+            renderSprites(frameBuffer, bgColorIds, obp0, obp1, lcdcInt)
         }
-
-        return pixels
     }
 
     /**
