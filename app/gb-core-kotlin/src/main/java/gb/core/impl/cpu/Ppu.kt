@@ -515,24 +515,29 @@ class Ppu(
         val scxForLine = if (rawScx >= 0) rawScx else scx.toInt()
         duration += scxForLine and 0x07
 
-        // このスキャンラインのスプライト数をカウント
+        // このスキャンラインのスプライトペナルティを計算
+        // 実機: スプライトのX座標と SCX の位置関係により 6-11 サイクルのペナルティが発生する
+        // 近似式: penalty = 11 - min(5, (sprite_raw_x + scx_initial) mod 8)
+        // sprite_raw_x はOAMの生X値（-8補正前）
         val lcdcInt = lcdc.toInt()
         val spriteEnabled = (lcdcInt and 0x02) != 0
         if (spriteEnabled) {
             val spriteSize = if (((lcdcInt shr 2) and 0x1) == 0) 8 else 16
             val oamSize = oam.size
-            var spriteCount = 0
+            val scxMod8 = scxForLine and 0x07
             for (i in 0 until 40) {
-                if (spriteCount >= 10) break
+                if (oam.size <= i shl 2) break
                 val oamIndex = i shl 2
                 if (oamIndex + 1 >= oamSize) continue
                 val spriteY = oam[oamIndex].toInt() - 16
                 if (currentLy >= spriteY && currentLy < spriteY + spriteSize) {
-                    spriteCount++
+                    // スプライトの生X値（OAM値、-8補正前）とSCXのmod 8から実際のペナルティを計算
+                    val rawSpriteX = oam[oamIndex + 1].toInt()
+                    val alignmentPenalty = minOf(5, (rawSpriteX + scxMod8) and 0x07)
+                    duration += 11 - alignmentPenalty
                 }
+                if (duration >= CYCLES_MODE_3_MAX) break // 上限に達したら打ち切り
             }
-            // 各スプライトにつき約6 T-cycles追加
-            duration += spriteCount * 6
         }
 
         // ウィンドウが有効で、このスキャンラインで描画される場合

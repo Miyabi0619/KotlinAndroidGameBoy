@@ -85,9 +85,12 @@ class SystemBus(
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
 
-        // DMA転送中（160サイクル）は、HRAM（0xFF80-0xFFFE）以外へのアクセスは0xFFを返す（実機仕様）
+        // DMA転送中は、HRAM（0xFF80-0xFFFE）以外へのCPUアクセスはDMAが現在転送中のバイトを返す。
+        // 実機: CPU は DMA ソースバスを「横読み」するため、転送中アドレスの値が見える。
+        // OAM に書き込もうとしても DMA が優先されるため、書き込みは無視される。
         if (ppu.dmaActive && addr !in 0xFF80..0xFFFE) {
-            return 0xFFu
+            val dmaSourceAddr = ppu.dmaSourceBase.toInt() + dmaBytesTransferred
+            return readByteInternal(dmaSourceAddr)
         }
 
         return readByteInternal(addr)

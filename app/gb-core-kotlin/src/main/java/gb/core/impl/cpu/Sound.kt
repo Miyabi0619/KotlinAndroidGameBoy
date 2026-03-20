@@ -269,13 +269,19 @@ class Sound {
         }
 
         // NR52 (Sound Control) の読み取り時、各チャンネルの有効状態を反映
+        // 実機仕様: チャンネルが enabled でも DAC が無効なら bit は 0 を返す
         if (offset == 0x16) {
             var result = 0x70 // bits 4-6 are always 1 on read
             if ((soundRegs[0x16].toInt() and 0x80) != 0) result = result or 0x80
-            if (square1State.enabled) result = result or 0x01
-            if (square2State.enabled) result = result or 0x02
-            if (waveState.enabled) result = result or 0x04
-            if (noiseState.enabled) result = result or 0x08
+            // DAC が有効かつチャンネルが enabled の場合のみ 1 を報告
+            val sq1DacOn = (soundRegs[0x02].toInt() and 0xF8) != 0
+            val sq2DacOn = (soundRegs[0x07].toInt() and 0xF8) != 0
+            val waveDacOn = (soundRegs[0x0A].toInt() and 0x80) != 0
+            val noiseDacOn = (soundRegs[0x11].toInt() and 0xF8) != 0
+            if (square1State.enabled && sq1DacOn) result = result or 0x01
+            if (square2State.enabled && sq2DacOn) result = result or 0x02
+            if (waveState.enabled && waveDacOn) result = result or 0x04
+            if (noiseState.enabled && noiseDacOn) result = result or 0x08
             return result.toUByte()
         }
 
