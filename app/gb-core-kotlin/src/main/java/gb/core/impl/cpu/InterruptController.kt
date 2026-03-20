@@ -27,10 +27,15 @@ class InterruptController {
     /** IE レジスタ (0xFFFF) - 割り込み許可フラグ。 */
     private var ieReg: UByte = 0u
 
-    fun readIf(): UByte = ifReg
+    /**
+     * IF レジスタ読み取り。
+     *
+     * DMG 実機仕様: ビット 5-7 は常に 1 を返す（実際の割り込みフラグはビット 0-4 のみ）。
+     */
+    fun readIf(): UByte = (ifReg.toInt() or 0xE0).toUByte()
 
     fun writeIf(value: UByte) {
-        // 上位 3bit は未使用なのでマスクしておく（将来のために下位 5bit のみ保持）
+        // ビット 5-7 は書き込み無効（実機でも下位 5bit のみ保持）
         ifReg = (value and 0x1Fu)
     }
 

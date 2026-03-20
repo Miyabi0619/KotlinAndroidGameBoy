@@ -87,14 +87,15 @@ class Machine(
     private fun handleInterrupts(): Int {
         val ifReg = interruptController.readIf()
         val ieReg = interruptController.readIe()
-        val pendingEnabled = (ifReg and ieReg)
+        // DMG 実機では readIf() のビット 5-7 は常に 1 のため、実際のペンディングはビット 0-4 のみで判定する
+        val pendingEnabled = (ifReg and ieReg and 0x1Fu)
 
-        if (ifReg == 0u.toUByte()) {
+        if (pendingEnabled == 0u.toUByte()) {
             return 0
         }
 
         // IMEが有効な場合、IE/IFの両方で有効な割り込みだけを処理
-        if (cpu.isInterruptsEnabled() && pendingEnabled != 0u.toUByte()) {
+        if (cpu.isInterruptsEnabled()) {
             val pending = interruptController.nextPending(true)
             if (pending != null) {
                 return cpu.serviceInterrupt(pending)
@@ -103,7 +104,7 @@ class Machine(
 
         // HALT/STOP状態の場合、有効な割り込み要求があれば状態を解除
         // 実機では、IME=0でも IE/IF の両方で有効な割り込みが立てば HALT/STOP は解除される
-        if ((cpu.isHalted() || cpu.isStopped()) && pendingEnabled != 0u.toUByte()) {
+        if (cpu.isHalted() || cpu.isStopped()) {
             cpu.wakeFromHalt()
         }
 
