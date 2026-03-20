@@ -6,10 +6,11 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val localProps = Properties().also { props ->
-    val f = rootProject.file("local.properties")
-    if (f.exists()) props.load(f.inputStream())
-}
+val localProps =
+    Properties().also { props ->
+        val f = rootProject.file("local.properties")
+        if (f.exists()) props.load(f.inputStream())
+    }
 
 android {
     namespace = "miyabi.kotlinandroidgameboy"

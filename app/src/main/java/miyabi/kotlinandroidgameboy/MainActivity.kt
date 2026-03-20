@@ -238,94 +238,94 @@ private fun gameScreen(
         val targetFrameTime = 1000.0 / 59.7275 // 約16.74ms（実機のフレームレート）
         var lastFrameTime = System.nanoTime() / 1_000_000.0 // より高精度なタイミング制御
         try {
-        while (isRunning && romLoaded) {
-            val frameStartTime = System.nanoTime() / 1_000_000.0
+            while (isRunning && romLoaded) {
+                val frameStartTime = System.nanoTime() / 1_000_000.0
 
-            // フレームスキップ判定：処理が遅れている場合は描画をスキップ
-            // ただし、音声は常に処理してタイミングを保つ
-            // スキップは極力避ける（ゲームの可玩性を保つため）
-            val timeSinceLastFrame =
-                if (frameCount > 0) {
-                    frameStartTime - lastFrameTime
-                } else {
-                    targetFrameTime // 最初のフレームはスキップしない
-                }
-            // フレームスキップを大幅に削減：スキップ率が高すぎる場合は無効化
-            val skipRate = if (frameCount > 0) (skippedFrames * 100.0 / frameCount) else 0.0
-            // スキップ率が20%を超える場合は、スキップを無効化（ゲームの可玩性を保つため）
-            val shouldSkipRender =
-                skipRate < 20.0 &&
-                    timeSinceLastFrame < targetFrameTime * 0.2 &&
-                    frameCount > 30 // 最初の30フレームはスキップしない
+                // フレームスキップ判定：処理が遅れている場合は描画をスキップ
+                // ただし、音声は常に処理してタイミングを保つ
+                // スキップは極力避ける（ゲームの可玩性を保つため）
+                val timeSinceLastFrame =
+                    if (frameCount > 0) {
+                        frameStartTime - lastFrameTime
+                    } else {
+                        targetFrameTime // 最初のフレームはスキップしない
+                    }
+                // フレームスキップを大幅に削減：スキップ率が高すぎる場合は無効化
+                val skipRate = if (frameCount > 0) (skippedFrames * 100.0 / frameCount) else 0.0
+                // スキップ率が20%を超える場合は、スキップを無効化（ゲームの可玩性を保つため）
+                val shouldSkipRender =
+                    skipRate < 20.0 &&
+                        timeSinceLastFrame < targetFrameTime * 0.2 &&
+                        frameCount > 30 // 最初の30フレームはスキップしない
 
-            val mergedInput = mergeInput(uiInput, InputStateHolder.controllerInput.value)
-            when (val result = gameLoop.runSingleFrame(mergedInput)) {
-                is CoreResult.Success -> {
-                    // オーディオサンプルをキューへ（専用スレッドが書き込む）
-                    // put() を使いキューが満杯のとき停止してフレームドロップを防ぐ
-                    // これによりエミュレータがオーディオ再生速度に自然同期する
-                    result.value.audioSamples?.let { samples ->
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            audioQueue.put(samples)
+                val mergedInput = mergeInput(uiInput, InputStateHolder.controllerInput.value)
+                when (val result = gameLoop.runSingleFrame(mergedInput)) {
+                    is CoreResult.Success -> {
+                        // オーディオサンプルをキューへ（専用スレッドが書き込む）
+                        // put() を使いキューが満杯のとき停止してフレームドロップを防ぐ
+                        // これによりエミュレータがオーディオ再生速度に自然同期する
+                        result.value.audioSamples?.let { samples ->
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                audioQueue.put(samples)
+                            }
+                        }
+
+                        // 描画はスキップ判定に基づいて処理
+                        if (!shouldSkipRender) {
+                            frameBuffer = result.value.frameBuffer
+                            frameIndex = result.value.stats?.frameIndex ?: 0L
+                        } else {
+                            skippedFrames++
+                        }
+
+                        errorMessage = null
+                        frameCount++
+
+                        if (frameCount % 300 == 0) {
+                            val actualFps = 1000.0 / (timeSinceLastFrame.coerceAtLeast(0.1))
+                            val skipRate = if (frameCount > 0) (skippedFrames * 100.0 / frameCount) else 0.0
+                            android.util.Log.d(
+                                "GameLoop",
+                                "Frame $frameCount: FPS=${String.format(java.util.Locale.US, "%.2f", actualFps)}, " +
+                                    "skipped=$skippedFrames (${String.format(java.util.Locale.US, "%.1f", skipRate)}%), " +
+                                    "audioQueue=${audioQueue.size}",
+                            )
                         }
                     }
 
-                    // 描画はスキップ判定に基づいて処理
-                    if (!shouldSkipRender) {
-                        frameBuffer = result.value.frameBuffer
-                        frameIndex = result.value.stats?.frameIndex ?: 0L
-                    } else {
-                        skippedFrames++
+                    is CoreResult.Error -> {
+                        android.util.Log.e("GameLoop", "Error in frame: ${toErrorMessage(result.error)}")
+                        errorMessage = toErrorMessage(result.error)
+                        isRunning = false
                     }
+                }
 
-                    errorMessage = null
-                    frameCount++
+                // フレームレートを正確に保つため、実機のフレームレート（59.7275Hz）に合わせる
+                val frameEndTime = System.nanoTime() / 1_000_000.0
+                val elapsed = frameEndTime - frameStartTime
+                val sleepTime = (targetFrameTime - elapsed).coerceAtLeast(0.0)
 
+                // フレームレートが遅すぎる場合は警告
+                if (elapsed > targetFrameTime * 1.5) {
                     if (frameCount % 300 == 0) {
-                        val actualFps = 1000.0 / (timeSinceLastFrame.coerceAtLeast(0.1))
-                        val skipRate = if (frameCount > 0) (skippedFrames * 100.0 / frameCount) else 0.0
-                        android.util.Log.d(
+                        val actualFps = 1000.0 / elapsed
+                        val fpsStr = String.format(java.util.Locale.US, "%.2f", actualFps)
+                        android.util.Log.w(
                             "GameLoop",
-                            "Frame $frameCount: FPS=${String.format(java.util.Locale.US, "%.2f", actualFps)}, " +
-                                "skipped=$skippedFrames (${String.format(java.util.Locale.US, "%.1f", skipRate)}%), " +
-                                "audioQueue=${audioQueue.size}",
+                            "Frame rate too slow: $fpsStr Hz (target: 59.73 Hz)",
                         )
                     }
                 }
 
-                is CoreResult.Error -> {
-                    android.util.Log.e("GameLoop", "Error in frame: ${toErrorMessage(result.error)}")
-                    errorMessage = toErrorMessage(result.error)
-                    isRunning = false
+                // より正確なタイミング制御のため、残り時間を待機
+                // フレームレートを正確に保つため、処理時間を考慮して待機時間を調整
+                // ただし、処理が遅れている場合は待機しない（フレームスキップで対応）
+                if (sleepTime > 0.1 && elapsed < targetFrameTime * 1.2) {
+                    kotlinx.coroutines.delay(sleepTime.toLong())
                 }
+
+                lastFrameTime = frameEndTime
             }
-
-            // フレームレートを正確に保つため、実機のフレームレート（59.7275Hz）に合わせる
-            val frameEndTime = System.nanoTime() / 1_000_000.0
-            val elapsed = frameEndTime - frameStartTime
-            val sleepTime = (targetFrameTime - elapsed).coerceAtLeast(0.0)
-
-            // フレームレートが遅すぎる場合は警告
-            if (elapsed > targetFrameTime * 1.5) {
-                if (frameCount % 300 == 0) {
-                    val actualFps = 1000.0 / elapsed
-                    val fpsStr = String.format(java.util.Locale.US, "%.2f", actualFps)
-                    android.util.Log.w(
-                        "GameLoop",
-                        "Frame rate too slow: $fpsStr Hz (target: 59.73 Hz)",
-                    )
-                }
-            }
-
-            // より正確なタイミング制御のため、残り時間を待機
-            // フレームレートを正確に保つため、処理時間を考慮して待機時間を調整
-            // ただし、処理が遅れている場合は待機しない（フレームスキップで対応）
-            if (sleepTime > 0.1 && elapsed < targetFrameTime * 1.2) {
-                kotlinx.coroutines.delay(sleepTime.toLong())
-            }
-
-            lastFrameTime = frameEndTime
-        }
         } finally {
             // ゲームループ停止時（通常終了・コルーチンキャンセル共通）にセーブデータを保存
             currentSavFileName?.let { savName ->

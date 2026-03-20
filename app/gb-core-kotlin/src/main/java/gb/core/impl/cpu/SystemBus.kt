@@ -79,6 +79,7 @@ class SystemBus(
      */
     private var serialData: UByte = 0u // SB
     private var serialControl: UByte = 0u // SC
+
     // シリアル転送残りサイクル数（0 = 非転送中）
     private var serialTransferCycles: Int = 0
 

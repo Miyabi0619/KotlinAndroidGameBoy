@@ -81,15 +81,16 @@ class Ppu(
     // captureFrameInternal() では -1 のスキャンラインは現在のレジスタ値にフォールバックする。
     private val scanlineScx = IntArray(SCREEN_HEIGHT) { -1 }
     private val scanlineScy = IntArray(SCREEN_HEIGHT) { -1 }
-    private val scanlineBgp = IntArray(SCREEN_HEIGHT) { -1 }   // BGパレット
-    private val scanlineObp0 = IntArray(SCREEN_HEIGHT) { -1 }  // OBJ パレット0
-    private val scanlineObp1 = IntArray(SCREEN_HEIGHT) { -1 }  // OBJ パレット1
-    private val scanlineLcdc = IntArray(SCREEN_HEIGHT) { -1 }  // LCD制御レジスタ
+    private val scanlineBgp = IntArray(SCREEN_HEIGHT) { -1 } // BGパレット
+    private val scanlineObp0 = IntArray(SCREEN_HEIGHT) { -1 } // OBJ パレット0
+    private val scanlineObp1 = IntArray(SCREEN_HEIGHT) { -1 } // OBJ パレット1
+    private val scanlineLcdc = IntArray(SCREEN_HEIGHT) { -1 } // LCD制御レジスタ
 
     // ウィンドウ内部ラインカウンタ（実機仕様に準拠）
     // 実機ではウィンドウが実際に描画されたスキャンラインでのみインクリメントされる。
     // フレーム途中でウィンドウを無効→再有効にしてもカウンタは継続する。
     private var windowLineCounter: Int = 0
+
     // 各スキャンラインでのウィンドウ内部ラインカウンタ値（-1 = このスキャンラインにウィンドウなし）
     private val scanlineWindowLine = IntArray(SCREEN_HEIGHT) { -1 }
 
