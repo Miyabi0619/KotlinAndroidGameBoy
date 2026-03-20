@@ -237,6 +237,7 @@ private fun gameScreen(
         // フレームレート制御用の変数
         val targetFrameTime = 1000.0 / 59.7275 // 約16.74ms（実機のフレームレート）
         var lastFrameTime = System.nanoTime() / 1_000_000.0 // より高精度なタイミング制御
+        try {
         while (isRunning && romLoaded) {
             val frameStartTime = System.nanoTime() / 1_000_000.0
 
@@ -325,11 +326,13 @@ private fun gameScreen(
 
             lastFrameTime = frameEndTime
         }
-        // ゲームループ停止時にセーブデータを保存
-        currentSavFileName?.let { savName ->
-            saveCartridgeRam(context, savName, gameLoop)
+        } finally {
+            // ゲームループ停止時（通常終了・コルーチンキャンセル共通）にセーブデータを保存
+            currentSavFileName?.let { savName ->
+                saveCartridgeRam(context, savName, gameLoop)
+            }
+            android.util.Log.d("GameLoop", "Game loop stopped")
         }
-        android.util.Log.d("GameLoop", "Game loop stopped")
     }
 
     Column(

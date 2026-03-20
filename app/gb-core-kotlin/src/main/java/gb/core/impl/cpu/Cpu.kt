@@ -205,6 +205,7 @@ class Cpu(
      */
     fun wakeFromHalt() {
         halted = false
+        stopped = false
     }
 
     /**
@@ -1517,7 +1518,8 @@ class Cpu(
                 } catch (_: RuntimeException) {
                     // テスト環境では Log がモックされていない可能性があるため、無視
                 }
-                error("Unknown opcode: 0x${opcode.toString(16)} at PC=0x${pcBefore.toString(16)}")
+                // 未定義命令は NOP として扱う（実機は未定義動作だが、クラッシュを防ぐ）
+                executeNop()
             }
         }
 
@@ -2653,6 +2655,10 @@ class Cpu(
      * 実機どおりの挙動（CGB のスピード切り替えなど）は簡略化している。
      */
     private fun executeStop(): Int {
+        // STOP は 2 バイト命令（0x10 0x00）: パディングバイトをスキップ
+        registers.pc = (registers.pc.toInt() + 1).toUShort()
+        // STOP 時に DIV カウンタをリセット（実機仕様）
+        bus.writeByte(0xFF04u.toUShort(), 0u)
         stopped = true
         return Cycles.NOP
     }
