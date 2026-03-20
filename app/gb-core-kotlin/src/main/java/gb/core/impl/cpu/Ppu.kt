@@ -333,6 +333,17 @@ class Ppu(
 
                 if (ly.toInt() < SCREEN_HEIGHT) {
                     // 次のスキャンライン開始（Mode 2）- レジスタをキャプチャ（ラスター効果対応）
+                    // LY=0 は VBlank 終了・新フレーム開始: スキャンライン配列をリセットする
+                    if (ly == 0u.toUByte()) {
+                        scanlineScx.fill(-1)
+                        scanlineScy.fill(-1)
+                        scanlineBgp.fill(-1)
+                        scanlineObp0.fill(-1)
+                        scanlineObp1.fill(-1)
+                        scanlineLcdc.fill(-1)
+                        windowLineCounter = 0
+                        scanlineWindowLine.fill(-1)
+                    }
                     val lyInt = ly.toInt()
                     scanlineScx[lyInt] = scx.toInt()
                     scanlineScy[lyInt] = scy.toInt()
@@ -352,25 +363,6 @@ class Ppu(
                     // その前にキャプチャしないと現フレームと次フレームが混在したちらつきが発生する。
                     captureFrameInternal()
                     // LYC=LY チェックを含む STAT 信号更新
-                    updateStatInterruptLine()
-                } else if (ly == 0u.toUByte()) {
-                    // VBlank終了、次のフレーム開始（Mode 2）
-                    // 新フレーム開始時に配列を -1（未設定）にリセットしてから、スキャンライン0をキャプチャ
-                    scanlineScx.fill(-1)
-                    scanlineScy.fill(-1)
-                    scanlineBgp.fill(-1)
-                    scanlineObp0.fill(-1)
-                    scanlineObp1.fill(-1)
-                    scanlineLcdc.fill(-1)
-                    windowLineCounter = 0
-                    scanlineWindowLine.fill(-1)
-                    scanlineScx[0] = scx.toInt()
-                    scanlineScy[0] = scy.toInt()
-                    scanlineBgp[0] = bgp.toInt()
-                    scanlineObp0[0] = obp0.toInt()
-                    scanlineObp1[0] = obp1.toInt()
-                    scanlineLcdc[0] = lcdc.toInt()
-                    setMode(PpuMode.OAM_SEARCH)
                     updateStatInterruptLine()
                 } else {
                     // VBlank 中の残りスキャンライン（LY=145〜153）の LYC=LY チェック
