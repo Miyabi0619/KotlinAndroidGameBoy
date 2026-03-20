@@ -1471,11 +1471,8 @@ class Sound {
 
         // 周波数を更新
         // 実機の仕様: change = shadowFrequency >> sweepShift
+        // change=0でも shadowFrequency の更新とオーバーフローチェックは実行する（実機仕様）
         val change = shadowFrequency shr currentSweepShift
-        if (change == 0) {
-            // changeが0の場合、何もしない
-            return
-        }
 
         val newFrequency =
             if ((nr10.toInt() and 0x08) != 0) {
@@ -1484,6 +1481,7 @@ class Sound {
                 shadowFrequency + change
             }
 
+        // 1回目のオーバーフローチェック
         if (newFrequency < 0 || newFrequency > 2047) {
             square1State.enabled = false
             sweepEnabled = false
@@ -1494,5 +1492,19 @@ class Sound {
         // 周波数レジスタを更新
         soundRegs[0x03] = (newFrequency and 0xFF).toUByte()
         soundRegs[0x04] = ((soundRegs[0x04].toInt() and 0xF8) or (newFrequency shr 8)).toUByte()
+
+        // 2回目のオーバーフローチェック（実際には書き込まず判定のみ）
+        // 実機仕様: 周波数更新後に再度計算し、2047超ならチャンネルを無効化する
+        val secondChange = shadowFrequency shr currentSweepShift
+        val secondFrequency =
+            if ((nr10.toInt() and 0x08) != 0) {
+                shadowFrequency - secondChange
+            } else {
+                shadowFrequency + secondChange
+            }
+        if (secondFrequency > 2047) {
+            square1State.enabled = false
+            sweepEnabled = false
+        }
     }
 }

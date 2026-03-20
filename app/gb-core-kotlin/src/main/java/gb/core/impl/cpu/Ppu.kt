@@ -802,10 +802,13 @@ class Ppu(
                 }
             }
 
-            // スプライトを描画（OAMの逆順で描画：実機の仕様に準拠）
-            // 同一X座標時はOAMの若い番号が優先されるため、降順で描画する
-            // （後から描画されたものが上に来るため、若い番号を後で描画）
-            for (i in spritesOnLine.reversed()) {
+            // スプライトを描画（DMG実機の優先度仕様に準拠）
+            // 実機 DMG: X座標が小さいスプライトが優先（上に表示される）
+            // X座標が同じ場合はOAMインデックスが小さいスプライトが優先
+            // → X座標昇順にソート（安定ソートでOAMインデックス順を保持）し逆順で描画
+            //   （後から描画されたものが上に来るため、優先度の高いものを最後に描画）
+            val sortedSprites = spritesOnLine.sortedBy { oam[(it shl 2) + 1].toInt() }
+            for (i in sortedSprites.reversed()) {
                 val oamIndex = i shl 2 // i * 4 をビットシフトに置き換え
                 if (oamIndex + 3 >= oamSize) continue
                 val spriteY = oam[oamIndex].toInt() - 16
