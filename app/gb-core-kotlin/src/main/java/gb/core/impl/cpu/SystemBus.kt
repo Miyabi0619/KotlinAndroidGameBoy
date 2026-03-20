@@ -74,11 +74,13 @@ class SystemBus(
      * - 0xFF01: SB（送受信データ）
      * - 0xFF02: SC（制御; bit7=開始, bit0=クロックソース）
      *
-     * 現在の実装では、リンクケーブルはサポートせず、
-     * 転送開始ビットが立ったタイミングで即座に転送完了＋割り込みを発生させる。
+     * 内部クロック使用時: 8ビット転送 × 512 T-cycles/bit = 4096 T-cycles
+     * リンクケーブル（外部クロック）はサポートしない（bit0=0 は即時スキップ）。
      */
     private var serialData: UByte = 0u // SB
     private var serialControl: UByte = 0u // SC
+    // シリアル転送残りサイクル数（0 = 非転送中）
+    private var serialTransferCycles: Int = 0
 
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
@@ -232,14 +234,16 @@ class SystemBus(
                 // SC: 制御レジスタ
                 serialControl = value
 
-                // bit7 が 1 の場合、シリアル転送開始。
-                // 現在の実装では即時完了させ、SERIAL 割り込みを要求する。
+                // bit7=1: 転送開始。bit0=1: 内部クロック（4096 T-cycles）、bit0=0: 外部クロック（スキップ）
                 if ((value.toInt() and 0x80) != 0) {
-                    // 実機では 8ビットシフト転送＋クロックに応じた遅延があるが、
-                    // ここでは簡易実装として即時完了させる。
-                    interruptController.request(InterruptController.Type.SERIAL)
-                    // 転送完了後、開始ビットをクリア（よくある実装）
-                    serialControl = (serialControl.toInt() and 0x7F).toUByte()
+                    if ((value.toInt() and 0x01) != 0) {
+                        // 内部クロック: 8ビット × 512 T-cycles = 4096 T-cycles 後に完了
+                        serialTransferCycles = 4096
+                    } else {
+                        // 外部クロック（リンクケーブル未接続）: 転送は完了しない（タイムアウトしない）
+                        // 実機でも外部クロック時は転送完了しないため、ここでは何もしない
+                        serialTransferCycles = 0
+                    }
                 }
             }
             in 0xFF04..0xFF07 -> {
@@ -275,6 +279,25 @@ class SystemBus(
                 hram[addr - 0xFF80] = value
             }
             0xFFFF -> interruptController.writeIe(value)
+        }
+    }
+
+    /**
+     * シリアル転送タイマーを進める。Machine.stepInstruction() から毎命令呼び出す。
+     *
+     * - 内部クロック時: 4096 T-cycles 後に転送完了 → SERIAL 割り込み要求 + SC bit7 クリア
+     * - 非転送中（serialTransferCycles=0）の場合は何もしない
+     */
+    fun stepSerial(cycles: Int) {
+        if (serialTransferCycles <= 0) return
+        serialTransferCycles -= cycles
+        if (serialTransferCycles <= 0) {
+            serialTransferCycles = 0
+            // 転送完了: 受信データを 0xFF にセット（リンクケーブル未接続時は 0xFF を受信）
+            serialData = 0xFFu
+            // SC bit7 をクリア（転送完了）
+            serialControl = (serialControl.toInt() and 0x7F).toUByte()
+            interruptController.request(InterruptController.Type.SERIAL)
         }
     }
 

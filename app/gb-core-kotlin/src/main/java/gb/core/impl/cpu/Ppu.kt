@@ -75,12 +75,23 @@ class Ppu(
     // 1 本の信号線の "立ち上がりエッジ" でのみ LCD_STAT 割り込みが発火する。
     private var statInterruptLine: Boolean = false
 
-    // スキャンラインごとのSCX/SCYスナップショット（ラスタースクロール対応）
+    // スキャンラインごとのレジスタスナップショット（ラスタースクロール・ラスターエフェクト対応）
     // 各スキャンラインのMode 2（OAM Search）開始時にキャプチャする。
     // -1 = 未設定（step() が呼ばれていない / 新フレーム開始後まだキャプチャされていない）を示すセンチネル値。
-    // captureFrameInternal() では -1 のスキャンラインは現在の scx/scy レジスタ値にフォールバックする。
+    // captureFrameInternal() では -1 のスキャンラインは現在のレジスタ値にフォールバックする。
     private val scanlineScx = IntArray(SCREEN_HEIGHT) { -1 }
     private val scanlineScy = IntArray(SCREEN_HEIGHT) { -1 }
+    private val scanlineBgp = IntArray(SCREEN_HEIGHT) { -1 }   // BGパレット
+    private val scanlineObp0 = IntArray(SCREEN_HEIGHT) { -1 }  // OBJ パレット0
+    private val scanlineObp1 = IntArray(SCREEN_HEIGHT) { -1 }  // OBJ パレット1
+    private val scanlineLcdc = IntArray(SCREEN_HEIGHT) { -1 }  // LCD制御レジスタ
+
+    // ウィンドウ内部ラインカウンタ（実機仕様に準拠）
+    // 実機ではウィンドウが実際に描画されたスキャンラインでのみインクリメントされる。
+    // フレーム途中でウィンドウを無効→再有効にしてもカウンタは継続する。
+    private var windowLineCounter: Int = 0
+    // 各スキャンラインでのウィンドウ内部ラインカウンタ値（-1 = このスキャンラインにウィンドウなし）
+    private val scanlineWindowLine = IntArray(SCREEN_HEIGHT) { -1 }
 
     // VBlank 開始時にキャプチャしたフレームバッファ（ちらつき防止）
     // VBlank 中にゲームが VRAM/OAM を書き換える前の「完成した1フレーム」を保持する。
@@ -320,9 +331,14 @@ class Ppu(
                 ly = ((ly.toInt() + 1) % TOTAL_SCANLINES).toUByte()
 
                 if (ly.toInt() < SCREEN_HEIGHT) {
-                    // 次のスキャンライン開始（Mode 2）- SCX/SCYをキャプチャ（ラスタースクロール対応）
-                    scanlineScx[ly.toInt()] = scx.toInt()
-                    scanlineScy[ly.toInt()] = scy.toInt()
+                    // 次のスキャンライン開始（Mode 2）- レジスタをキャプチャ（ラスター効果対応）
+                    val lyInt = ly.toInt()
+                    scanlineScx[lyInt] = scx.toInt()
+                    scanlineScy[lyInt] = scy.toInt()
+                    scanlineBgp[lyInt] = bgp.toInt()
+                    scanlineObp0[lyInt] = obp0.toInt()
+                    scanlineObp1[lyInt] = obp1.toInt()
+                    scanlineLcdc[lyInt] = lcdc.toInt()
                     setMode(PpuMode.OAM_SEARCH)
                     // LYC=LY チェック（新しい LY 値で判定）
                     updateStatInterruptLine()
@@ -341,8 +357,18 @@ class Ppu(
                     // 新フレーム開始時に配列を -1（未設定）にリセットしてから、スキャンライン0をキャプチャ
                     scanlineScx.fill(-1)
                     scanlineScy.fill(-1)
+                    scanlineBgp.fill(-1)
+                    scanlineObp0.fill(-1)
+                    scanlineObp1.fill(-1)
+                    scanlineLcdc.fill(-1)
+                    windowLineCounter = 0
+                    scanlineWindowLine.fill(-1)
                     scanlineScx[0] = scx.toInt()
                     scanlineScy[0] = scy.toInt()
+                    scanlineBgp[0] = bgp.toInt()
+                    scanlineObp0[0] = obp0.toInt()
+                    scanlineObp1[0] = obp1.toInt()
+                    scanlineLcdc[0] = lcdc.toInt()
                     setMode(PpuMode.OAM_SEARCH)
                     updateStatInterruptLine()
                 } else {
@@ -378,6 +404,17 @@ class Ppu(
                         setMode(PpuMode.HBLANK)
                         // Mode 3 → HBlank 遷移: 信号線更新（HBlank 条件が新たに真になれば発火）
                         updateStatInterruptLine()
+                        // ウィンドウ内部ラインカウンタの更新
+                        // 実機ではウィンドウが実際に描画されたスキャンラインでのみインクリメント
+                        val currentLy = ly.toInt()
+                        if (currentLy < SCREEN_HEIGHT) {
+                            val lcdcSnap = if (scanlineLcdc[currentLy] >= 0) scanlineLcdc[currentLy] else lcdc.toInt()
+                            val windowEnabledForLine = (lcdcSnap and 0x20) != 0
+                            if (windowEnabledForLine && currentLy >= wy.toInt() && wx.toInt() in 0..166) {
+                                scanlineWindowLine[currentLy] = windowLineCounter
+                                windowLineCounter++
+                            }
+                        }
                     }
                 }
 
@@ -441,6 +478,21 @@ class Ppu(
         }
         statInterruptLine = newLine
     }
+
+    /**
+     * パレットレジスタ値からARGBカラー配列を計算する。
+     *
+     * Game Boy の 4段階グレースケールを ARGB 値にマッピングする。
+     */
+    private fun computePaletteColors(paletteReg: Int): IntArray =
+        IntArray(4) { colorId ->
+            when ((paletteReg shr (colorId * 2)) and 0x03) {
+                0 -> 0xFFFFFFFF.toInt() // 白
+                1 -> 0xFFAAAAAA.toInt() // 薄いグレー
+                2 -> 0xFF555555.toInt() // 濃いグレー
+                else -> 0xFF000000.toInt() // 黒
+            }
+        }
 
     /**
      * 現在のスキャンラインでのMode 3（Pixel Transfer）の長さを計算する。
@@ -526,123 +578,93 @@ class Ppu(
         // 背景/ウィンドウのカラーIDを保持する配列（スプライトの優先度処理用）
         val bgColorIds = UByteArray(SCREEN_WIDTH * SCREEN_HEIGHT) { 0u }
 
-        // 背景描画（カラーIDを保持）
-        // レジスタ値を事前に計算（パフォーマンス向上）
-        val lcdcInt = lcdc.toInt()
-        val bgEnabled = (lcdcInt and 0x01) != 0
-        val bgMapBase = if (((lcdcInt shr 3) and 0x1) == 0) BG_MAP0_BASE else BG_MAP1_BASE
-        val tileDataMode = (lcdcInt shr 4) and 0x1
-
-        // パレットマッピングを事前計算（4色分のARGB値を事前計算）
-        val bgpInt = bgp.toInt()
-        val paletteColors =
-            IntArray(4) { colorId ->
-                val paletteEntry = (bgpInt shr (colorId * 2)) and 0x03
-                when (paletteEntry) {
-                    0 -> 0xFFFFFFFF.toInt()
-
-                    // 白
-                    1 -> 0xFFAAAAAA.toInt()
-
-                    // 薄いグレー
-                    2 -> 0xFF555555.toInt()
-
-                    // 濃いグレー
-                    else -> 0xFF000000.toInt() // 黒
-                }
-            }
-
-        // 最適化: 型変換と計算を削減（スコープ外で定義）
+        // フォールバック値（スキャンラインスナップショットが未設定の場合に使用）
+        val fallbackLcdc = lcdc.toInt()
+        val fallbackBgp = bgp.toInt()
         val vramSize = vram.size
 
-        if (bgEnabled) {
-            val currentScx = scx.toInt()
-            val currentScy = scy.toInt()
-            for (y in 0 until SCREEN_HEIGHT) {
-                // スキャンラインごとにキャプチャしたSCX/SCYを使用（ラスタースクロール対応）。
-                // -1（未設定）の場合は現在の scx/scy レジスタ値にフォールバック。
-                // これにより step() なしで captureFrameInternal() を呼ぶテストでも正常動作する。
-                val scxInt = if (scanlineScx[y] >= 0) scanlineScx[y] else currentScx
-                val scyInt = if (scanlineScy[y] >= 0) scanlineScy[y] else currentScy
-                // スクロールYを考慮した背景Y座標
-                val bgY = (y + scyInt) and 0xFF
-                val tileRow = bgY shr 3
-                val rowInTile = bgY and 0x07
-                val rowInTile2 = rowInTile shl 1
+        // 背景描画（スキャンラインごとにキャプチャしたレジスタ値を使用）
+        for (y in 0 until SCREEN_HEIGHT) {
+            val lcdcSnap = if (scanlineLcdc[y] >= 0) scanlineLcdc[y] else fallbackLcdc
+            val bgEnabled = (lcdcSnap and 0x01) != 0
 
+            if (!bgEnabled) {
+                // 背景が無効な場合は、このスキャンラインを白で塗りつぶし
+                val base = y * SCREEN_WIDTH
                 for (x in 0 until SCREEN_WIDTH) {
-                    // スクロールXを考慮した背景X座標
-                    val bgX = (x + scxInt) and 0xFF
-                    val tileCol = bgX shr 3
-                    val colInTile = bgX and 0x07
-
-                    // 32x32タイルマップなので、モジュロ演算でラップアラウンド
-                    val bgIndex = bgMapBase + (tileRow and 0x1F) * BG_MAP_WIDTH + (tileCol and 0x1F)
-                    val tileIndexByte = if (bgIndex < vramSize) vram[bgIndex] else 0u
-
-                    // タイルインデックスの計算
-                    val tileIndex =
-                        if (tileDataMode == 0) {
-                            // 符号付き: 0x80-0xFF は -128〜-1 として扱う
-                            val signed = tileIndexByte.toInt().toByte().toInt()
-                            256 + signed // 0x8800 ベースに変換（0x8800 = 0x8000 + 0x800）
-                        } else {
-                            // 符号なし: 0x8000 ベース
-                            tileIndexByte.toInt()
-                        }
-
-                    // タイルデータは 0x8000 から、1 タイル 16 バイト
-                    val lineAddr = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES + rowInTile2
-
-                    val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
-                    val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
-
-                    val bit = 7 - colInTile
-                    val colorId =
-                        (((high shr bit) and 0x1) shl 1) or
-                            ((low shr bit) and 0x1)
-
-                    val pixelIndex = y * SCREEN_WIDTH + x
-                    frameBuffer[pixelIndex] = paletteColors[colorId]
-                    bgColorIds[pixelIndex] = colorId.toUByte()
+                    frameBuffer[base + x] = 0xFFFFFFFF.toInt()
                 }
+                continue
             }
-        } else {
-            // 背景が無効な場合は、すべて白で塗りつぶし、カラーIDは0
-            frameBuffer.fill(0xFFFFFFFF.toInt())
-            bgColorIds.fill(0u)
+
+            val bgMapBase = if (((lcdcSnap shr 3) and 0x1) == 0) BG_MAP0_BASE else BG_MAP1_BASE
+            val tileDataMode = (lcdcSnap shr 4) and 0x1
+            val bgpSnap = if (scanlineBgp[y] >= 0) scanlineBgp[y] else fallbackBgp
+            val paletteColors = computePaletteColors(bgpSnap)
+
+            val scxInt = if (scanlineScx[y] >= 0) scanlineScx[y] else scx.toInt()
+            val scyInt = if (scanlineScy[y] >= 0) scanlineScy[y] else scy.toInt()
+
+            val bgY = (y + scyInt) and 0xFF
+            val tileRow = bgY shr 3
+            val rowInTile = bgY and 0x07
+            val rowInTile2 = rowInTile shl 1
+
+            for (x in 0 until SCREEN_WIDTH) {
+                val bgX = (x + scxInt) and 0xFF
+                val tileCol = bgX shr 3
+                val colInTile = bgX and 0x07
+
+                // 32x32タイルマップなので、モジュロ演算でラップアラウンド
+                val bgIndex = bgMapBase + (tileRow and 0x1F) * BG_MAP_WIDTH + (tileCol and 0x1F)
+                val tileIndexByte = if (bgIndex < vramSize) vram[bgIndex] else 0u
+
+                val tileIndex =
+                    if (tileDataMode == 0) {
+                        // 符号付き: 0x80-0xFF は -128〜-1 として扱う
+                        val signed = tileIndexByte.toInt().toByte().toInt()
+                        256 + signed // 0x8800 ベースに変換（0x8800 = 0x8000 + 0x800）
+                    } else {
+                        // 符号なし: 0x8000 ベース
+                        tileIndexByte.toInt()
+                    }
+
+                val lineAddr = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES + rowInTile2
+                val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
+                val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
+
+                val bit = 7 - colInTile
+                val colorId =
+                    (((high shr bit) and 0x1) shl 1) or
+                        ((low shr bit) and 0x1)
+
+                val pixelIndex = y * SCREEN_WIDTH + x
+                frameBuffer[pixelIndex] = paletteColors[colorId]
+                bgColorIds[pixelIndex] = colorId.toUByte()
+            }
         }
 
         // ウィンドウ描画（背景の上、スプライトの下に描画）
-        // LCDC.5 (Window Enable) が 1 の場合のみ描画
-        val windowEnabled = (lcdcInt and 0x20) != 0
-        if (windowEnabled) {
-            renderWindow(frameBuffer, bgColorIds, lcdcInt, paletteColors)
-        }
+        // scanlineWindowLine[] に記録されたスキャンラインのみ描画する
+        renderWindow(frameBuffer, bgColorIds, fallbackLcdc)
 
-        // スプライトの描画（LCDC.1が1の場合のみ）
-        val spriteEnabled = (lcdcInt and 0x02) != 0
-        if (spriteEnabled) {
-            renderSprites(frameBuffer, bgColorIds, obp0, obp1, lcdcInt)
-        }
+        // スプライトの描画（スキャンラインごとのLCDC/OBPスナップショットを使用）
+        renderSprites(frameBuffer, bgColorIds, fallbackLcdc)
     }
 
     /**
-     * ウィンドウを描画する。
+     * ウィンドウを描画する（スキャンライン単位、ウィンドウ内部ラインカウンタ使用）。
      *
-     * - ウィンドウは背景の上に描画される
-     * - ウィンドウレジスタ（WX/WY）を使用
-     *   - WX (0xFF4B): ウィンドウの左端のX座標（実際のX座標 = WX - 7）
-     *   - WY (0xFF4A): ウィンドウの上端のY座標
-     * - LCDC.5 (Window Enable) が 1 の場合のみ描画
-     * - LCDC.6 (Window Tile Map) でウィンドウマップを選択
-     * - ウィンドウ描画時もカラーIDを保持する
+     * - [scanlineWindowLine] に記録されたスキャンラインのみ描画する
+     * - 実機仕様: ウィンドウが描画された行でのみ内部カウンタがインクリメントされる
+     *   （フレーム途中でウィンドウ無効→再有効にしてもカウンタは継続する）
+     * - WX < 7 対応: 実機では WX=0-6 の場合も描画される（左端からの表示）
+     *   WX=7: ウィンドウがx=0から開始、WX=0: 最初の7ピクセルがクリップされる
      */
     private fun renderWindow(
         pixels: IntArray,
         bgColorIds: UByteArray,
-        lcdcInt: Int,
-        paletteColors: IntArray,
+        fallbackLcdc: Int,
     ) {
         val wyInt = wy.toInt()
         val wxInt = wx.toInt()
@@ -650,47 +672,45 @@ class Ppu(
         // WYが144以上の場合、ウィンドウは表示されない（画面外）
         if (wyInt >= SCREEN_HEIGHT) return
 
-        // WXが7未満の場合、ウィンドウは表示されない（実機の仕様）
-        if (wxInt < 7) return
+        // WXが167以上の場合、ウィンドウは表示されない（画面外右端）
+        if (wxInt >= 167) return
 
-        // WXが166以上の場合、ウィンドウは表示されない（画面外）
-        // 実際のX座標 = WX - 7 なので、WX >= 166 の場合は画面外
-        if (wxInt >= 166) return
+        // ウィンドウのX開始座標（WX - 7、WX < 7 の場合は 0 にクランプ）
+        // windowTileStartX が負の場合、ウィンドウの左端が画面左端より外にある
+        val windowTileStartX = wxInt - 7 // ウィンドウタイル内X=0 に対応する画面X座標
+        val windowScreenStartX = maxOf(0, windowTileStartX)
 
-        // ウィンドウの左上座標（画面座標系）
-        // WXレジスタの値から7を引いた値が実際のX座標
-        val windowStartX = wxInt - 7
-        val windowStartY = wyInt
-
-        // LCDC.6 でウィンドウマップを選択
-        // 0: ウィンドウマップ0（0x9800–0x9BFF）
-        // 1: ウィンドウマップ1（0x9C00–0x9FFF）
-        val windowMapBase = if (((lcdcInt shr 6) and 0x1) == 0) BG_MAP0_BASE else BG_MAP1_BASE
-        val tileDataMode = (lcdcInt shr 4) and 0x1
-
-        // ウィンドウ内の各ピクセルを描画
-        // ウィンドウは画面の特定の領域にのみ描画される
-        // 最適化: 型変換と計算を削減
         val vramSize = vram.size
 
-        for (y in windowStartY until SCREEN_HEIGHT) {
-            // ウィンドウ内のY座標（ウィンドウのタイルマップ内での位置）
-            val windowY = y - windowStartY
-            val tileRow = windowY shr 3 // / 8 をビットシフトに置き換え
-            val rowInTile = windowY and 0x07 // % 8 をビット演算に置き換え
-            val rowInTile2 = rowInTile shl 1 // rowInTile * 2
+        for (y in 0 until SCREEN_HEIGHT) {
+            // step() でウィンドウが描画されたスキャンラインのみ処理する
+            val windowLine = scanlineWindowLine[y]
+            if (windowLine < 0) continue
 
-            for (x in windowStartX until SCREEN_WIDTH) {
-                // ウィンドウ内のX座標（ウィンドウのタイルマップ内での位置）
-                val windowX = x - windowStartX
-                val tileCol = windowX shr 3 // / 8 をビットシフトに置き換え
-                val colInTile = windowX and 0x07 // % 8 をビット演算に置き換え
+            // スキャンライン固有のレジスタスナップショットを使用（ラスター効果対応）
+            val lcdcSnap = if (scanlineLcdc[y] >= 0) scanlineLcdc[y] else fallbackLcdc
+            // LCDC.6 でウィンドウマップを選択
+            val windowMapBase = if (((lcdcSnap shr 6) and 0x1) == 0) BG_MAP0_BASE else BG_MAP1_BASE
+            val tileDataMode = (lcdcSnap shr 4) and 0x1
+
+            val bgpSnap = if (scanlineBgp[y] >= 0) scanlineBgp[y] else bgp.toInt()
+            val paletteColors = computePaletteColors(bgpSnap)
+
+            // ウィンドウ内部ラインカウンタによるタイル行計算（実機仕様に準拠）
+            val tileRow = windowLine shr 3
+            val rowInTile = windowLine and 0x07
+            val rowInTile2 = rowInTile shl 1
+
+            for (x in windowScreenStartX until SCREEN_WIDTH) {
+                // ウィンドウタイルマップ内X座標（windowTileStartX が負でも正しく計算される）
+                val windowX = x - windowTileStartX
+                val tileCol = windowX shr 3
+                val colInTile = windowX and 0x07
 
                 // 32x32タイルマップなので、モジュロ演算でラップアラウンド
                 val windowIndex = windowMapBase + (tileRow and 0x1F) * BG_MAP_WIDTH + (tileCol and 0x1F)
                 val tileIndexByte = if (windowIndex < vramSize) vram[windowIndex] else 0u
 
-                // タイルインデックスの計算
                 val tileIndex =
                     if (tileDataMode == 0) {
                         // 符号付き: 0x80-0xFF は -128〜-1 として扱う
@@ -701,10 +721,7 @@ class Ppu(
                         tileIndexByte.toInt()
                     }
 
-                // タイルデータは 0x8000 から、1 タイル 16 バイト
                 val lineAddr = TILE_DATA_BASE + tileIndex * TILE_SIZE_BYTES + rowInTile2
-
-                // 範囲チェックを事前に行う（getOrElseのオーバーヘッドを削減）
                 val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
                 val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
 
@@ -714,7 +731,6 @@ class Ppu(
                         ((low shr bit) and 0x1)
 
                 val pixelIndex = y * SCREEN_WIDTH + x
-                // ルックアップテーブルを使用（関数呼び出しのオーバーヘッドを削減）
                 pixels[pixelIndex] = paletteColors[colorId]
                 bgColorIds[pixelIndex] = colorId.toUByte()
             }
@@ -722,81 +738,51 @@ class Ppu(
     }
 
     /**
-     * スプライトを描画する。
+     * スプライトを描画する（スキャンライン単位、スキャンライン固有のOBP/LCDCを使用）。
      *
      * - OAM（0xFE00-0xFE9F）からスプライトデータを読み取る
      * - 各スプライトは4バイト：Y, X, タイルインデックス, 属性
      * - 最大10個のスプライトを描画（実機の制限）
      * - LCDC.2でスプライトサイズを決定（0=8x8、1=8x16）
+     * - OBP0/OBP1はスキャンライン固有のスナップショット値を使用（ラスター効果対応）
      * - 優先度処理：優先度が高い（bit7=1）場合、背景/ウィンドウのカラーID 0以外の上には描画しない
      *
      * @param pixels ピクセル配列（ARGB形式）
      * @param bgColorIds 背景/ウィンドウのカラーID配列（優先度処理用）
+     * @param fallbackLcdc スキャンラインスナップショット未設定時のフォールバック LCDC 値
      */
     private fun renderSprites(
         pixels: IntArray,
         bgColorIds: UByteArray,
-        obp0: UByte,
-        obp1: UByte,
-        lcdcInt: Int,
+        fallbackLcdc: Int,
     ) {
-        // スプライトサイズを事前に計算
-        val spriteSize = if (((lcdcInt shr 2) and 0x1) == 0) 8 else 16
-
-        // パレットマッピングを事前計算（OBP0/OBP1用）
-        val obp0Int = obp0.toInt()
-        val obp1Int = obp1.toInt()
-        val obp0Colors =
-            IntArray(4) { colorId ->
-                val paletteEntry = (obp0Int shr (colorId * 2)) and 0x03
-                when (paletteEntry) {
-                    0 -> 0xFFFFFFFF.toInt()
-
-                    // 白（透明）
-                    1 -> 0xFFAAAAAA.toInt()
-
-                    // 薄いグレー
-                    2 -> 0xFF555555.toInt()
-
-                    // 濃いグレー
-                    else -> 0xFF000000.toInt() // 黒
-                }
-            }
-        val obp1Colors =
-            IntArray(4) { colorId ->
-                val paletteEntry = (obp1Int shr (colorId * 2)) and 0x03
-                when (paletteEntry) {
-                    0 -> 0xFFFFFFFF.toInt()
-
-                    // 白（透明）
-                    1 -> 0xFFAAAAAA.toInt()
-
-                    // 薄いグレー
-                    2 -> 0xFF555555.toInt()
-
-                    // 濃いグレー
-                    else -> 0xFF000000.toInt() // 黒
-                }
-            }
-
-        // 各スキャンラインで、そのラインに表示されるスプライトを検索して描画
-        // 最適化: 型変換と計算を削減
         val vramSize = vram.size
         val oamSize = oam.size
+        val fallbackObp0 = obp0.toInt()
+        val fallbackObp1 = obp1.toInt()
 
         for (y in 0 until SCREEN_HEIGHT) {
+            // スキャンライン固有のレジスタスナップショットを使用
+            val lcdcSnap = if (scanlineLcdc[y] >= 0) scanlineLcdc[y] else fallbackLcdc
+            val spriteEnabled = (lcdcSnap and 0x02) != 0
+            if (!spriteEnabled) continue
+
+            val spriteSize = if (((lcdcSnap shr 2) and 0x1) == 0) 8 else 16
+            val obp0Snap = if (scanlineObp0[y] >= 0) scanlineObp0[y] else fallbackObp0
+            val obp1Snap = if (scanlineObp1[y] >= 0) scanlineObp1[y] else fallbackObp1
+            val obp0Colors = computePaletteColors(obp0Snap)
+            val obp1Colors = computePaletteColors(obp1Snap)
+
             val spritesOnLine = mutableListOf<Int>()
 
             // OAMからスプライトを検索（最大10個）
             for (i in 0 until 40) {
                 if (spritesOnLine.size >= 10) break
 
-                val oamIndex = i shl 2 // i * 4 をビットシフトに置き換え
+                val oamIndex = i shl 2
                 if (oamIndex + 1 >= oamSize) continue
                 val spriteY = oam[oamIndex].toInt() - 16
-                val spriteX = oam[oamIndex + 1].toInt() - 8
 
-                // このスキャンラインに表示されるかチェック
                 if (y >= spriteY && y < spriteY + spriteSize) {
                     spritesOnLine.add(i)
                 }
@@ -806,17 +792,16 @@ class Ppu(
             // 実機 DMG: X座標が小さいスプライトが優先（上に表示される）
             // X座標が同じ場合はOAMインデックスが小さいスプライトが優先
             // → X座標昇順にソート（安定ソートでOAMインデックス順を保持）し逆順で描画
-            //   （後から描画されたものが上に来るため、優先度の高いものを最後に描画）
             val sortedSprites = spritesOnLine.sortedBy { oam[(it shl 2) + 1].toInt() }
             for (i in sortedSprites.reversed()) {
-                val oamIndex = i shl 2 // i * 4 をビットシフトに置き換え
+                val oamIndex = i shl 2
                 if (oamIndex + 3 >= oamSize) continue
                 val spriteY = oam[oamIndex].toInt() - 16
                 val spriteX = oam[oamIndex + 1].toInt() - 8
                 val tileIndex = oam[oamIndex + 2].toInt()
                 val attributes = oam[oamIndex + 3].toInt()
 
-                val paletteColors = if ((attributes and 0x10) != 0) obp1Colors else obp0Colors
+                val spriteColors = if ((attributes and 0x10) != 0) obp1Colors else obp0Colors
                 val xFlip = (attributes and 0x20) != 0
                 val yFlip = (attributes and 0x40) != 0
                 val priority = (attributes and 0x80) != 0
@@ -831,11 +816,9 @@ class Ppu(
                     } else {
                         tileIndex
                     }
-                val tileRow = actualRow and 0x07 // % 8 をビット演算に置き換え
+                val tileRow = actualRow and 0x07
 
-                val lineAddr = TILE_DATA_BASE + actualTileIndex * TILE_SIZE_BYTES + (tileRow shl 1) // tileRow * 2
-
-                // 範囲チェックを事前に行う（getOrElseのオーバーヘッドを削減）
+                val lineAddr = TILE_DATA_BASE + actualTileIndex * TILE_SIZE_BYTES + (tileRow shl 1)
                 val low = if (lineAddr < vramSize) vram[lineAddr].toInt() else 0
                 val high = if (lineAddr + 1 < vramSize) vram[lineAddr + 1].toInt() else 0
 
@@ -853,14 +836,12 @@ class Ppu(
 
                     val pixelIndex = y * SCREEN_WIDTH + screenX
 
-                    // 優先度チェック：優先度が高い（bit7=1）場合、背景/ウィンドウのカラーID 0以外の上には描画しない
-                    // 実機の仕様：優先度が高いスプライトは、背景/ウィンドウの透明部分（カラーID 0）の上にのみ描画される
+                    // 優先度チェック：bit7=1 の場合、背景/ウィンドウのカラーID 0以外の上には描画しない
                     if (priority && bgColorIds[pixelIndex] != 0u.toUByte()) {
                         continue
                     }
 
-                    // ルックアップテーブルを使用（関数呼び出しのオーバーヘッドを削減）
-                    pixels[pixelIndex] = paletteColors[colorId]
+                    pixels[pixelIndex] = spriteColors[colorId]
                 }
             }
         }

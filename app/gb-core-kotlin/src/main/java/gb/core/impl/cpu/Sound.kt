@@ -154,7 +154,7 @@ class Sound {
             val nr33 = soundRegs[0x0D].toInt()
             val nr34 = soundRegs[0x0E].toInt()
             val freq = ((nr34 and 0x07) shl 8) or nr33
-            if (freq == 0 || freq >= 2044) return false
+            if (freq == 0 || freq >= 2048) return false
             return currentWaveRamBuffer.all { it == 0xFFu.toUByte() }
         }
     private var frameHalfCycles: Long = 0L // フレーム内経過半サウンドサイクル（毎フレームリセット）
@@ -387,7 +387,19 @@ class Sound {
 
             0x04 -> { // NR14 (Square 1 Frequency High & Trigger)
                 // Length enableはトリガーに関係なく常に更新（実機仕様）
+                val prevLengthEnabled1 = square1State.lengthEnabled
                 square1State.lengthEnabled = (value.toInt() and 0x40) != 0
+                // 奇数フレームシーケンサステップ時の追加クロック
+                // 実機仕様: Length Enable が 0→1 に遷移し、フレームシーケンサが奇数ステップの場合、
+                // 直ちに Length カウンタを1回クロックする（次のステップが偶数＝Length更新タイミングのため）
+                if (!prevLengthEnabled1 && square1State.lengthEnabled && (frameSequencerStep and 1) == 1) {
+                    if (square1State.lengthCounter > 0) {
+                        square1State.lengthCounter--
+                        if (square1State.lengthCounter == 0) {
+                            square1State.enabled = false
+                        }
+                    }
+                }
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -454,7 +466,17 @@ class Sound {
 
             0x09 -> { // NR24 (Square 2 Frequency High & Trigger)
                 // Length enableはトリガーに関係なく常に更新（実機仕様）
+                val prevLengthEnabled2 = square2State.lengthEnabled
                 square2State.lengthEnabled = (value.toInt() and 0x40) != 0
+                // 奇数フレームシーケンサステップ時の追加クロック
+                if (!prevLengthEnabled2 && square2State.lengthEnabled && (frameSequencerStep and 1) == 1) {
+                    if (square2State.lengthCounter > 0) {
+                        square2State.lengthCounter--
+                        if (square2State.lengthCounter == 0) {
+                            square2State.enabled = false
+                        }
+                    }
+                }
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -526,7 +548,17 @@ class Sound {
 
             0x0E -> { // NR34 (Wave Frequency High & Trigger)
                 // Length enableはトリガーに関係なく常に更新（実機仕様）
+                val prevLengthEnabledW = waveState.lengthEnabled
                 waveState.lengthEnabled = (value.toInt() and 0x40) != 0
+                // 奇数フレームシーケンサステップ時の追加クロック（Wave は長さカウンタ最大256）
+                if (!prevLengthEnabledW && waveState.lengthEnabled && (frameSequencerStep and 1) == 1) {
+                    if (waveState.lengthCounter > 0) {
+                        waveState.lengthCounter--
+                        if (waveState.lengthCounter == 0) {
+                            waveState.enabled = false
+                        }
+                    }
+                }
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -539,6 +571,16 @@ class Sound {
                     val nr30 = soundRegs[0x0A]
                     val waveEnabled = (nr30.toInt() and 0x80) != 0
                     if (waveEnabled) {
+                        // DMG バグ: Waveチャンネルが既に再生中のときにトリガーすると Wave RAM が破壊される。
+                        // 実機の挙動: 現在再生中のサンプルバイトが Wave RAM の先頭4バイトに書き込まれる。
+                        // これはテスト ROM (dmg_sound) で検証される実機固有の動作。
+                        if (waveState.enabled) {
+                            val corruptByteIdx = (waveState.position shr 1) and 0x0F
+                            val corruptByte = waveRam[corruptByteIdx]
+                            for (k in 0 until 4) {
+                                waveRam[k] = corruptByte
+                            }
+                        }
                         waveState.enabled = true
                         waveState.position = 0
                         waveState.phaseAccumulator = 0.0
@@ -581,7 +623,17 @@ class Sound {
 
             0x13 -> { // NR44 (Noise Trigger)
                 // Length enableはトリガーに関係なく常に更新（実機仕様）
+                val prevLengthEnabledN = noiseState.lengthEnabled
                 noiseState.lengthEnabled = (value.toInt() and 0x40) != 0
+                // 奇数フレームシーケンサステップ時の追加クロック
+                if (!prevLengthEnabledN && noiseState.lengthEnabled && (frameSequencerStep and 1) == 1) {
+                    if (noiseState.lengthCounter > 0) {
+                        noiseState.lengthCounter--
+                        if (noiseState.lengthCounter == 0) {
+                            noiseState.enabled = false
+                        }
+                    }
+                }
                 if ((value.toInt() and 0x80) != 0) {
                     // トリガー時、NR52[7]=0の場合はチャンネルを有効化しない（実機仕様）
                     val nr52 = soundRegs[0x16]
@@ -1319,12 +1371,10 @@ class Sound {
 
         // 周波数を計算
         val frequency = ((nr34.toInt() and 0x07) shl 8) or nr33.toInt()
-        // freq >= 2044 → 波形周波数 16384 Hz 以上（人間の可聴域上限付近～超音波域）。
-        // 実機でも不可聴だが、HP フィルタに大きな DC オフセットを与えて
-        // 次フレームで突入ノイズを発生させるため、0 を返す。
-        // ゲームが freq=2047 等を「Wave チャンネルを無音化する」手段として使うケース（例：ポケモン
-        // ピカチュウの鳴き声切り替え時）への対処。
-        if (frequency == 0 || frequency >= 2044) {
+        // freq >= 2048 → 11ビット周波数レジスタの有効範囲超え（実機では到達不能値）。
+        // 実機では freq=2047 が最大値で波形周波数 = 65536 / (2048-2047) = 65536 Hz（超音波域）。
+        // HP フィルタへの DC オフセット注入を防ぐため 0 を返す。
+        if (frequency == 0 || frequency >= 2048) {
             return 0
         }
 

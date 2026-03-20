@@ -61,6 +61,7 @@ class Machine(
         ppu.step(cycles)
         sound.step(cycles, timer.getDivInternalCounter())
         bus.stepDma(cycles)
+        bus.stepSerial(cycles)
 
         val interruptCycles = handleInterrupts()
         if (interruptCycles > 0) {
@@ -68,6 +69,7 @@ class Machine(
             ppu.step(interruptCycles)
             sound.step(interruptCycles, timer.getDivInternalCounter())
             bus.stepDma(interruptCycles)
+            bus.stepSerial(interruptCycles)
         }
 
         return cycles + interruptCycles
