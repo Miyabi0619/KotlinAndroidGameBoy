@@ -73,4 +73,4 @@ jobs:
 
             ${{ env.COMMIT_MESSAGE }}
           files: app/build/outputs/apk/release/*.apk
-          prerelease: true
+          prerelease: false
