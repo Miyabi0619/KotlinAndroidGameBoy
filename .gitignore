@@ -16,3 +16,4 @@ local.properties
 *.jks
 *.keystore
 .kotlin/
+/test_file/

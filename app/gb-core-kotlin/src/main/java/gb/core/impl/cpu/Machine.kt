@@ -11,6 +11,14 @@ import kotlin.ExperimentalUnsignedTypes
 @OptIn(ExperimentalUnsignedTypes::class)
 class Machine(
     rom: UByteArray,
+    /**
+     * カートリッジRAM未搭載のROMでも強制的に8KB RAMを割り当てる（テスト専用）。
+     *
+     * - blarggテストROM（halt_bug.gb等）はカートリッジタイプはRAM対応でも
+     *   RAMサイズヘッダが0のものがあり、結果コードを$A000-$A0FFに書き込む
+     *   blarggシェル規約を満たすためにRAMが必要。
+     */
+    private val forceCartridgeRam: Boolean = false,
 ) {
     private val interruptController = InterruptController()
     private val timer = Timer(interruptController)
@@ -209,12 +217,17 @@ class Machine(
                 else -> 0
             }
 
-        val needsRam = (hasMbc1 || hasMbc3 || hasMbc5) && ramSizeBytes > 0
-        val cartridgeRam = if (needsRam) UByteArray(ramSizeBytes) { 0u } else null
+        val hasMbc = hasMbc1 || hasMbc3 || hasMbc5
+        // RAMサイズヘッダが0でもforceCartridgeRamが指定されていれば8KBを強制確保する
+        // （blarggテストROMが結果コードを$A000-$A0FFに書き込む規約に対応するため）
+        val effectiveRamSizeBytes =
+            if (ramSizeBytes == 0 && hasMbc && forceCartridgeRam) 0x2000 else ramSizeBytes
+        val needsRam = hasMbc && effectiveRamSizeBytes > 0
+        val cartridgeRam = if (needsRam) UByteArray(effectiveRamSizeBytes) { 0u } else null
 
-        val mbc1 = if (hasMbc1) Mbc1(romSize = rom.size, ramSize = ramSizeBytes) else null
-        val mbc3 = if (hasMbc3) Mbc3(romSize = rom.size, ramSize = ramSizeBytes) else null
-        val mbc5 = if (hasMbc5) Mbc5(romSize = rom.size, ramSize = ramSizeBytes) else null
+        val mbc1 = if (hasMbc1) Mbc1(romSize = rom.size, ramSize = effectiveRamSizeBytes) else null
+        val mbc3 = if (hasMbc3) Mbc3(romSize = rom.size, ramSize = effectiveRamSizeBytes) else null
+        val mbc5 = if (hasMbc5) Mbc5(romSize = rom.size, ramSize = effectiveRamSizeBytes) else null
 
         return MbcResult(mbc1, mbc3, mbc5, cartridgeRam)
     }

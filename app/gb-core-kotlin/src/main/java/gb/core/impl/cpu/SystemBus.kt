@@ -83,6 +83,13 @@ class SystemBus(
     // シリアル転送残りサイクル数（0 = 非転送中）
     private var serialTransferCycles: Int = 0
 
+    /**
+     * シリアル送信（SB書き込み+SC bit7トリガー）を監視するフック。
+     * blarggテストROM等がSBに1文字ずつ書いて結果を出力するのを、
+     * ヘッドレステスト環境で捕捉するために使用する。
+     */
+    var serialOutListener: ((UByte) -> Unit)? = null
+
     override fun readByte(address: UShort): UByte {
         val addr = address.toInt()
 
@@ -240,6 +247,7 @@ class SystemBus(
 
                 // bit7=1: 転送開始。bit0=1: 内部クロック（4096 T-cycles）、bit0=0: 外部クロック（スキップ）
                 if ((value.toInt() and 0x80) != 0) {
+                    serialOutListener?.invoke(serialData)
                     if ((value.toInt() and 0x01) != 0) {
                         // 内部クロック: 8ビット × 512 T-cycles = 4096 T-cycles 後に完了
                         serialTransferCycles = 4096
